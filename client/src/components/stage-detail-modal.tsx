@@ -126,6 +126,8 @@ interface StageDetailModalProps {
   coatingTypeOptions?: { value: string; label: string }[];
   pcLocationOptions?: { value: string; label: string }[];
   powderCoatingTeamOptions?: { value: string; label: string }[];
+  /** True when `order.currentStage` matches this modal's stage (workflow PATCH without /edit). */
+  isOrderCurrentStage?: boolean;
   onSave?: (data: {
     proofFileName?: string;
     proofPreviewUrl?: string;
@@ -242,6 +244,7 @@ export function StageDetailModal({
   coatingTypeOptions = [],
   pcLocationOptions = [],
   powderCoatingTeamOptions = [],
+  isOrderCurrentStage = false,
   onSave,
 }: StageDetailModalProps) {
   const mode: StageModalMode =
@@ -699,6 +702,10 @@ export function StageDetailModal({
   };
 
   const showEditInputs = (mode === "edit" || mode === "complete") && isAuthorized;
+  const showSheetDualActions =
+    stageKey === "sheet_processing" && mode === "complete" && isOrderCurrentStage;
+  const sheetHistoricalEdit =
+    stageKey === "sheet_processing" && !isOrderCurrentStage && showEditInputs;
   const isDispatchStage = stageKey === "dispatch_validation";
   const pcDispatchQtyClass = cn("h-9 text-sm", isDispatchStage && dispatchAutofillInputClass);
   const pcDispatchBodySizeClass = cn("h-9 text-sm max-w-[200px]", isDispatchStage && dispatchAutofillInputClass);
@@ -750,6 +757,15 @@ export function StageDetailModal({
           <div className="shrink-0 mx-4 sm:mx-6 mb-3 rounded-md border border-orange-500/70 bg-orange-500/10 px-3 py-2">
             <p className="text-sm font-medium text-orange-700 dark:text-orange-400">
               Not allowed to change/update
+            </p>
+          </div>
+        )}
+
+        {sheetHistoricalEdit && (
+          <div className="shrink-0 mx-4 sm:mx-6 mb-3 rounded-md border border-amber-500/70 bg-amber-500/10 px-3 py-2">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+              Historical edit — saves via PATCH …/edit. Setting QC to NOT OK returns the order to
+              Sheet Processing and clears later stages.
             </p>
           </div>
         )}
@@ -1820,7 +1836,7 @@ export function StageDetailModal({
               Close
             </Button>
             {showEditInputs && onSave && (
-              stageKey === "sheet_processing" && mode === "complete" ? (
+              showSheetDualActions ? (
                 <>
                   <Button
                     type="button"
@@ -1858,12 +1874,26 @@ export function StageDetailModal({
                 <Button
                   className="w-full sm:w-auto"
                   onClick={() => handleSave()}
-                  disabled={saving || uploader.status === "uploading" || uploader.status === "has_errors"}
+                  disabled={
+                    saving ||
+                    uploader.status === "uploading" ||
+                    uploader.status === "has_errors" ||
+                    (mode === "complete" &&
+                      !isOrderCurrentStage &&
+                      (isFabricationStage(stageKey) ||
+                        isPowderCoatingOrDispatchStage(stageKey) ||
+                        isCombinedFabricationPowderCoating(stageKey)))
+                  }
                 >
                   {(() => {
                     if (saving) return "Saving...";
                     if (uploader.status === "uploading") return "Uploading...";
-                    if (mode === "edit") return "Save changes";
+                    if (mode === "edit" || sheetHistoricalEdit) return "Save changes";
+                    if (
+                      !isOrderCurrentStage &&
+                      (isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey))
+                    )
+                      return "Save changes";
                     if (isCombinedFabricationPowderCoating(stageKey) || isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey))
                       return "Save & Next";
                     return "Save & Next";
