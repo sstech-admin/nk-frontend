@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -5,6 +6,7 @@ import { z } from "zod";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -23,7 +25,7 @@ import {
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
-import { getOrderStageUpdatePath, USE_REAL_API } from "@/lib/api";
+import { allocateWorkOrderNumber, getOrderStageUpdatePath, USE_REAL_API } from "@/lib/api";
 import { SearchablePartySelect } from "@/components/searchable-party-select";
 import { SearchableSelect } from "@/components/searchable-select";
 import type { Party, Member } from "@shared/schema";
@@ -36,7 +38,6 @@ const ACCESSORIES = [
 ];
 
 const orderFormSchema = z.object({
-  orderNo: z.string().min(1, "Order number is required"),
   partyName: z.string().min(1, "Party name is required"),
   designerName: z.string().min(1, "Designer name is required"),
   panelType: z.string().min(1, "Panel type is required"),
@@ -59,6 +60,24 @@ const orderFormSchema = z.object({
 });
 
 type OrderFormValues = z.infer<typeof orderFormSchema>;
+
+function parseCreateOrderError(err: unknown): { status?: number; message: string } {
+  const raw = err instanceof Error ? err.message : String(err);
+  const m = raw.match(/^(\d+):\s*([\s\S]*)$/);
+  if (!m) return { message: raw };
+  const status = Number(m[1]);
+  let message = m[2].trim();
+  try {
+    const j = JSON.parse(m[2]);
+    message = (j.message as string) ?? message;
+    if (Array.isArray(j.errors) && j.errors.length > 0) {
+      message = j.errors.join("; ");
+    }
+  } catch {
+    // plain text
+  }
+  return { status, message };
+}
 
 function RequiredLabel({ children, optional }: { children: React.ReactNode; optional?: boolean }) {
   return (
@@ -163,6 +182,28 @@ export default function CreateOrderPage() {
   const { toast } = useToast();
   const { user } = useAuth();
 
+  const [workOrderNumber, setWorkOrderNumber] = useState<string | null>(null);
+  const [woAllocating, setWoAllocating] = useState(true);
+  const [woAllocateError, setWoAllocateError] = useState<string | null>(null);
+
+  const allocateWo = useCallback(async () => {
+    setWoAllocating(true);
+    setWoAllocateError(null);
+    try {
+      const wo = await allocateWorkOrderNumber();
+      setWorkOrderNumber(wo);
+    } catch (e) {
+      setWorkOrderNumber(null);
+      setWoAllocateError(e instanceof Error ? e.message : "Could not generate work order number");
+    } finally {
+      setWoAllocating(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    allocateWo();
+  }, [allocateWo]);
+
   const { data: partiesData } = useQuery<unknown>({
     queryKey: ["/api/parties"],
   });
@@ -213,7 +254,6 @@ export default function CreateOrderPage() {
   const form = useForm<OrderFormValues>({
     resolver: zodResolver(orderFormSchema),
     defaultValues: {
-      orderNo: "",
       partyName: "",
       designerName: "",
       panelType: "",
@@ -237,12 +277,13 @@ export default function CreateOrderPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: OrderFormValues) => {
+    mutationFn: async ({ data, workOrderNumber: wo }: { data: OrderFormValues; workOrderNumber: string }) => {
       const partyId = activeParties.find((p) => p.name === data.partyName)?.id ?? "";
       const designerId = activeMembers.find((m) => m.name === data.designerName)?.id ?? "";
       const preparedBy = user?._id ?? "";
 
       const payload = {
+        workOrderNumber: wo,
         partyId,
         designerId,
         preparedBy,
@@ -274,14 +315,20 @@ export default function CreateOrderPage() {
       };
 
       const res = await apiRequest("POST", "/api/orders", payload);
-      return res.json() as Promise<{ success?: boolean; data?: { _id?: string }; _id?: string; id?: string }>;
+      return res.json() as Promise<{
+        success?: boolean;
+        message?: string;
+        data?: { _id?: string; workOrderNumber?: string };
+        _id?: string;
+        id?: string;
+      }>;
     },
     onSuccess: async (json, variables) => {
       const orderId = json?.data?._id ?? json?._id ?? json?.id;
       if (orderId && USE_REAL_API) {
         try {
           await apiRequest("PATCH", getOrderStageUpdatePath(orderId, "DESIGN_PREPARATION"), {
-            remarks: variables.remarks?.trim() || "Order created.",
+            remarks: variables.data.remarks?.trim() || "Order created.",
             notes: "Initial design stage.",
           });
         } catch {
@@ -291,17 +338,46 @@ export default function CreateOrderPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["orders-list"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      toast({ title: "Work order created successfully" });
+      const woLabel = json?.data?.workOrderNumber ?? variables.workOrderNumber;
+      toast({
+        title: "Work order created successfully",
+        description: woLabel ? `Work order ${woLabel}` : undefined,
+      });
       navigate("/orders");
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      const { status, message } = parseCreateOrderError(err);
+      if (status === 409) {
+        toast({
+          title: "Work order number already used",
+          description: "Close this form and open Create again to get a new number, or contact support.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (status === 400 && /workOrderNumber|work-order-number\/next/i.test(message)) {
+        toast({
+          title: "Invalid work order number",
+          description: message,
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Could not create order", description: message, variant: "destructive" });
     },
   });
 
   function handleSubmit() {
+    if (!workOrderNumber) {
+      toast({
+        title: "Work order number not ready",
+        description: woAllocateError ?? "Generate a work order number before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
     form.handleSubmit(
-      (data) => createMutation.mutate(data),
+      (data) => createMutation.mutate({ data, workOrderNumber }),
       () => {
         toast({ title: "Please fill all required fields", description: "Fields marked with * are required", variant: "destructive" });
       }
@@ -331,15 +407,28 @@ export default function CreateOrderPage() {
           <Card>
             <CardContent className="p-4 sm:p-6 space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={form.control} name="orderNo" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel><RequiredLabel>WO. No.</RequiredLabel></FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g. WO-101" {...field} data-testid="input-order-no" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
+                <div className="space-y-2">
+                  <FormLabel><RequiredLabel>WO. No.</RequiredLabel></FormLabel>
+                  {woAllocating ? (
+                    <Skeleton className="h-9 w-full" data-testid="skeleton-order-no" />
+                  ) : woAllocateError ? (
+                    <div className="space-y-2">
+                      <p className="text-sm text-destructive">{woAllocateError}</p>
+                      <Button type="button" variant="outline" size="sm" onClick={() => allocateWo()}>
+                        Generate work order number
+                      </Button>
+                    </div>
+                  ) : (
+                    <Input
+                      value={workOrderNumber ?? ""}
+                      disabled
+                      readOnly
+                      className="bg-muted font-medium"
+                      data-testid="input-order-no"
+                    />
+                  )}
+                  <p className="text-xs text-muted-foreground">Assigned automatically; cannot be edited.</p>
+                </div>
 
                 <FormField control={form.control} name="designerName" render={({ field }) => (
                   <FormItem>
@@ -613,7 +702,7 @@ export default function CreateOrderPage() {
             <Button
               type="button"
               onClick={handleSubmit}
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || woAllocating || !workOrderNumber}
               className="min-w-[200px]"
               data-testid="button-submit-order"
             >

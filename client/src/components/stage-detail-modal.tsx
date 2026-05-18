@@ -30,6 +30,14 @@ import type { Order } from "@shared/schema";
 import { StageImageUploader } from "@/components/stage-image-uploader";
 import { useStageUploads } from "@/hooks/use-stage-uploads";
 import type { StageAttachment } from "@/lib/stage-uploads";
+import type { SheetSaveIntent } from "@/lib/order-stages";
+import { resolveDesignFormValues } from "@/lib/design-stage-form";
+import {
+  DesignStageOrderFields,
+  type DesignOrderFieldValues,
+} from "@/components/design-stage-order-fields";
+
+export type StageSaveOptions = { intent?: SheetSaveIntent };
 
 export interface StageCompletionData {
   completedDate?: string;
@@ -45,6 +53,18 @@ export interface StageCompletionData {
   teamMemberId?: string;
   qualityCheckPassed?: boolean;
   woNo?: string;
+  partyName?: string;
+  panelType?: string;
+  quantity?: string | number;
+  description?: string;
+  parts?: string | number;
+  customerWoNo?: string;
+  powderCoatingType?: string;
+  colorMountingPlate?: string;
+  colorBaseStand?: string;
+  rateType?: string;
+  rate?: string;
+  orderRemarks?: string;
   customerName?: string;
   dcNo?: string;
   poNo?: string;
@@ -87,13 +107,17 @@ export interface StageCompletionData {
   attachments?: StageAttachment[];
 }
 
+export type StageModalMode = "view" | "edit" | "complete";
+
 interface StageDetailModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   order: Order;
   stageKey: string;
   stageLabel: string;
-  isCompleted: boolean;
+  /** @deprecated Prefer `mode === "view"` */
+  isCompleted?: boolean;
+  mode?: StageModalMode;
   completionData?: StageCompletionData | null;
   isAuthorized?: boolean;
   /** For fabrication stage: options for team member dropdown */
@@ -114,6 +138,18 @@ interface StageDetailModalProps {
     teamMemberId?: string;
     qualityCheckPassed?: boolean;
     woNo?: string;
+    partyName?: string;
+    panelType?: string;
+    quantity?: string | number;
+    description?: string;
+    parts?: string | number;
+    customerWoNo?: string;
+    powderCoatingType?: string;
+    colorMountingPlate?: string;
+    colorBaseStand?: string;
+    rateType?: string;
+    rate?: string;
+    orderRemarks?: string;
     customerName?: string;
     dcNo?: string;
     poNo?: string;
@@ -154,7 +190,7 @@ interface StageDetailModalProps {
     baseQty?: string | number;
     standQty?: string | number;
     attachments?: StageAttachment[];
-  }) => void | Promise<void>;
+  }, options?: StageSaveOptions) => void | Promise<boolean | void>;
 }
 
 function ModalField({
@@ -198,7 +234,8 @@ export function StageDetailModal({
   order,
   stageKey,
   stageLabel,
-  isCompleted,
+  isCompleted: isCompletedLegacy,
+  mode: modeProp,
   completionData,
   isAuthorized = true,
   teamMemberOptions = [],
@@ -207,6 +244,10 @@ export function StageDetailModal({
   powderCoatingTeamOptions = [],
   onSave,
 }: StageDetailModalProps) {
+  const mode: StageModalMode =
+    modeProp ?? (isCompletedLegacy ? "view" : "complete");
+  const isViewMode = mode === "view";
+
   const [remarks, setRemarks] = React.useState(
     completionData?.remarks ?? ""
   );
@@ -281,6 +322,32 @@ export function StageDetailModal({
   const [pcCanopyQty, setPcCanopyQty] = React.useState(completionData?.canopyQty != null ? String(completionData.canopyQty) : "");
   const [pcBaseQty, setPcBaseQty] = React.useState(completionData?.baseQty != null ? String(completionData.baseQty) : "");
   const [pcStandQty, setPcStandQty] = React.useState(completionData?.standQty != null ? String(completionData.standQty) : "");
+
+  const [designFields, setDesignFields] = React.useState<DesignOrderFieldValues>(() => {
+    const r = resolveDesignFormValues(completionData, order);
+    return {
+      partyName: r.partyName ?? "",
+      designerName: r.designerName ?? "",
+      panelType: r.panelType ?? "",
+      poNo: r.poNo ?? "",
+      quantity: r.quantity ?? 0,
+      description: r.description ?? "",
+      parts: r.parts ?? "",
+      customerWoNo: r.customerWoNo ?? "",
+      powderCoatingType: r.powderCoatingType ?? "single_coat",
+      colorBody: r.colorBody ?? "",
+      colorMountingPlate: r.colorMountingPlate ?? "",
+      colorBaseStand: r.colorBaseStand ?? "",
+      rateType: r.rateType ?? "including_acc",
+      rate: r.rate ?? "",
+      orderRemarks: r.orderRemarks ?? "",
+      pointLock: r.pointLock ?? false,
+      threePointLock: r.threePointLock ?? false,
+      puGasketing: r.puGasketing ?? false,
+      pattiGasketing: r.pattiGasketing ?? false,
+      accessoriesOther: r.accessoriesOther ?? "",
+    };
+  });
 
   React.useEffect(() => {
     if (open) {
@@ -365,6 +432,29 @@ export function StageDetailModal({
       setPcCanopyQty(completionData?.canopyQty != null ? String(completionData.canopyQty) : "");
       setPcBaseQty(completionData?.baseQty != null ? String(completionData.baseQty) : "");
       setPcStandQty(completionData?.standQty != null ? String(completionData.standQty) : "");
+      const resolved = resolveDesignFormValues(completionData, order);
+      setDesignFields({
+        partyName: resolved.partyName ?? "",
+        designerName: resolved.designerName ?? "",
+        panelType: resolved.panelType ?? "",
+        poNo: resolved.poNo ?? "",
+        quantity: resolved.quantity ?? 0,
+        description: resolved.description ?? "",
+        parts: resolved.parts ?? "",
+        customerWoNo: resolved.customerWoNo ?? "",
+        powderCoatingType: resolved.powderCoatingType ?? "single_coat",
+        colorBody: resolved.colorBody ?? "",
+        colorMountingPlate: resolved.colorMountingPlate ?? "",
+        colorBaseStand: resolved.colorBaseStand ?? "",
+        rateType: resolved.rateType ?? "including_acc",
+        rate: resolved.rate ?? "",
+        orderRemarks: resolved.orderRemarks ?? "",
+        pointLock: resolved.pointLock ?? false,
+        threePointLock: resolved.threePointLock ?? false,
+        puGasketing: resolved.puGasketing ?? false,
+        pattiGasketing: resolved.pattiGasketing ?? false,
+        accessoriesOther: resolved.accessoriesOther ?? "",
+      });
     }
   }, [open, completionData, order]);
 
@@ -412,6 +502,19 @@ export function StageDetailModal({
       if (!pcWoNo?.trim()) errors.woNo = "WO No. is required";
       if (!pcCustomerName?.trim()) errors.customerName = "Customer name is required";
       if (!remarks?.trim()) errors.remarks = "Remarks / notes are required";
+    } else if (stageKey === "design_preparation") {
+      if (!designFields.partyName?.trim()) errors.partyName = "Party name is required";
+      if (!designFields.designerName?.trim()) errors.designerName = "Designer name is required";
+      if (!designFields.panelType?.trim()) errors.panelType = "Panel type is required";
+      if (!designFields.description?.trim()) errors.description = "Description is required";
+      if (!designFields.customerWoNo?.trim()) errors.customerWoNo = "Customer WO No is required";
+      if (!designFields.quantity || Number(designFields.quantity) < 1) errors.quantity = "Quantity must be at least 1";
+      if (designFields.parts === "" || designFields.parts == null) errors.parts = "Parts is required";
+      if (!designFields.colorBody?.trim()) errors.colorBody = "Body color is required";
+      if (!designFields.colorMountingPlate?.trim()) errors.colorMountingPlate = "Mounting plate color is required";
+      if (!designFields.colorBaseStand?.trim()) errors.colorBaseStand = "Base/Stand color is required";
+      if (!designFields.rate?.trim()) errors.rate = "Rate is required";
+      if (!remarks?.trim()) errors.remarks = "Remarks / notes are required";
     } else {
       if (!remarks?.trim()) errors.remarks = "Remarks / notes are required";
     }
@@ -419,7 +522,7 @@ export function StageDetailModal({
     return Object.keys(errors).length === 0;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (saveIntent?: SheetSaveIntent) => {
     if (!validate()) return;
     // Guard: don't let a save race with in-flight uploads or skip failed files.
     if (uploader.status === "uploading") {
@@ -494,11 +597,39 @@ export function StageDetailModal({
       data.baseQty = pcBaseQty ? (Number(pcBaseQty) || pcBaseQty) : undefined;
       data.standQty = pcStandQty ? (Number(pcStandQty) || pcStandQty) : undefined;
     }
+    if (stageKey === "design_preparation") {
+      data.partyName = designFields.partyName?.trim() || undefined;
+      data.designerName = designFields.designerName?.trim() || undefined;
+      data.panelType = designFields.panelType?.trim() || undefined;
+      data.poNo = designFields.poNo?.trim() || undefined;
+      data.quantity = designFields.quantity;
+      data.description = designFields.description?.trim() || undefined;
+      data.parts = designFields.parts;
+      data.customerWoNo = designFields.customerWoNo?.trim() || undefined;
+      data.powderCoatingType = designFields.powderCoatingType;
+      data.colorBody = designFields.colorBody?.trim() || undefined;
+      data.colorMountingPlate = designFields.colorMountingPlate?.trim() || undefined;
+      data.colorBaseStand = designFields.colorBaseStand?.trim() || undefined;
+      data.rateType = designFields.rateType;
+      data.rate = designFields.rate?.trim() || undefined;
+      data.orderRemarks = designFields.orderRemarks?.trim() || undefined;
+      data.pointLock = designFields.pointLock;
+      data.threePointLock = designFields.threePointLock;
+      data.puGasketing = designFields.puGasketing;
+      data.pattiGasketing = designFields.pattiGasketing;
+      data.accessoriesOther = designFields.accessoriesOther?.trim() || undefined;
+    }
     if (!onSave) return;
     setSaving(true);
     try {
-      await onSave(data);
-      onOpenChange(false);
+      const options: StageSaveOptions | undefined =
+        stageKey === "sheet_processing" && mode === "complete" && saveIntent
+          ? { intent: saveIntent }
+          : undefined;
+      const shouldClose = await onSave(data, options);
+      if (shouldClose !== false) {
+        onOpenChange(false);
+      }
     } finally {
       setSaving(false);
     }
@@ -567,7 +698,7 @@ export function StageDetailModal({
     onOpenChange(open);
   };
 
-  const showEditInputs = !isCompleted && isAuthorized;
+  const showEditInputs = (mode === "edit" || mode === "complete") && isAuthorized;
   const isDispatchStage = stageKey === "dispatch_validation";
   const pcDispatchQtyClass = cn("h-9 text-sm", isDispatchStage && dispatchAutofillInputClass);
   const pcDispatchBodySizeClass = cn("h-9 text-sm max-w-[200px]", isDispatchStage && dispatchAutofillInputClass);
@@ -576,7 +707,7 @@ export function StageDetailModal({
     <Dialog open={open} onOpenChange={handleClose as (open: boolean) => void}>
       <DialogContent
         className={cn(
-          "w-[calc(100vw-2rem)] max-w-[min(480px,calc(100vw-2rem))] max-h-[90vh] p-0 gap-0 overflow-hidden bg-card border-card-border",
+          "w-[calc(100vw-2rem)] max-w-[min(520px,calc(100vw-2rem))] max-h-[90vh] p-0 gap-0 overflow-hidden bg-card border-card-border",
           "flex flex-col"
         )}
         onPointerDownOutside={(e) => {
@@ -585,27 +716,37 @@ export function StageDetailModal({
       >
         <DialogHeader className="shrink-0 p-4 sm:p-6 pb-4 pr-10 sm:pr-12 space-y-1">
           <div className="flex items-center gap-2 min-w-0">
-            {isCompleted && (
+            {isViewMode && (
               <CheckCircle2 className="h-6 w-6 shrink-0 text-primary" />
             )}
             <DialogTitle className="text-base font-semibold uppercase tracking-wide text-foreground truncate">
-              {isCombinedFabricationPowderCoating(stageKey)
-                ? "Update Stage: FABRICATION"
-                : (isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey))
-                  ? `Update Stage: ${stageLabel.toUpperCase()}`
-                  : `${stageLabel} ${isCompleted ? "Completed" : "Update"}`}
+              {mode === "edit"
+                ? `Edit: ${stageLabel}`
+                : isCombinedFabricationPowderCoating(stageKey)
+                  ? mode === "complete"
+                    ? "Update Stage: FABRICATION"
+                    : stageLabel
+                  : isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey)
+                    ? mode === "complete"
+                      ? `Update Stage: ${stageLabel.toUpperCase()}`
+                      : stageLabel
+                    : `${stageLabel} ${isViewMode ? "Completed" : mode === "complete" ? "Update" : ""}`}
             </DialogTitle>
           </div>
           <DialogDescription className="text-sm text-muted-foreground">
-            {isCombinedFabricationPowderCoating(stageKey)
-              ? "Fabrication and Powder Coating"
-              : (isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey))
-                ? "Enter the details to update the status of this stage."
-                : "Stage details and collected data."}
+            {mode === "edit"
+              ? "Update saved details for this stage. Workflow will not advance."
+              : isCombinedFabricationPowderCoating(stageKey)
+                ? "Fabrication and Powder Coating"
+                : isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey)
+                  ? mode === "complete"
+                    ? "Enter the details to complete this stage and move to the next step."
+                    : "Stage details and collected data."
+                  : "Stage details and collected data."}
           </DialogDescription>
         </DialogHeader>
 
-        {!isCompleted && !isAuthorized && (
+        {!isViewMode && !isAuthorized && (
           <div className="shrink-0 mx-4 sm:mx-6 mb-3 rounded-md border border-orange-500/70 bg-orange-500/10 px-3 py-2">
             <p className="text-sm font-medium text-orange-700 dark:text-orange-400">
               Not allowed to change/update
@@ -1478,71 +1619,22 @@ export function StageDetailModal({
                   Order Details
                 </h4>
                 <p className="text-xs text-muted-foreground">
-                  Details captured when the order was created (Design stage).
+                  {showEditInputs
+                    ? "Edit order details saved with this design stage."
+                    : "Details captured when the order was created (Design stage)."}
                 </p>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-x-4">
-                  <ModalField label="Order No." value={order.orderNo ?? "—"} />
-                  <ModalField
-                    label="Date"
-                    value={
-                      order.date
-                        ? new Date(order.date).toLocaleDateString("en-IN", {
-                            year: "numeric",
-                            month: "2-digit",
-                            day: "2-digit",
-                          })
-                        : "—"
-                    }
-                  />
-                  <ModalField label="Party Name" value={order.partyName ?? "—"} />
-                  <ModalField label="Designer Name" value={order.designerName ?? "—"} />
-                  <ModalField label="Panel Type" value={order.panelType ?? "—"} />
-                  <ModalField label="P.O. No." value={order.poNo ?? "—"} />
-                  <ModalField label="Quantity" value={order.quantity ?? "—"} />
-                  <ModalField label="Description (Size)" value={order.description ?? "—"} className="col-span-2" />
-                  <ModalField label="Parts (Bhag)" value={order.parts ?? "—"} />
-                  <ModalField label="Customer WO No." value={order.customerWoNo ?? "—"} />
-                  <ModalField label="Powder Coating Type" value={order.powderCoatingType ?? "—"} />
-                  <ModalField label="Body Color" value={order.colorBody ?? "—"} />
-                  <ModalField label="Mounting Plate Color" value={order.colorMountingPlate ?? "—"} />
-                  <ModalField label="Base/Stand Color" value={order.colorBaseStand ?? "—"} />
-                  <ModalField label="Rate Type" value={order.rateType ?? "—"} />
-                  <ModalField label="Rate" value={order.rate ?? "—"} />
-                  <ModalField label="Remarks" value={order.remarks ?? "—"} className="col-span-2" />
-                </div>
-                {/* Accessories (from create order – API object or legacy array); always show section in Design view */}
-                {(() => {
-                  const accObj = (order as { accessoriesObj?: { pointLock?: boolean; threePointLock?: boolean; puGasketing?: boolean; pattiGasketing?: boolean; other?: string } }).accessoriesObj;
-                  const hasArray = Array.isArray(order.accessories) && order.accessories.length > 0;
-                  const accessoryItems = [
-                    { key: "pointLock" as const, label: "Point Lock", checked: accObj ? !!accObj.pointLock : order.accessories?.includes("point_lock") },
-                    { key: "threePointLock" as const, label: "3 Point Lock", checked: accObj ? !!accObj.threePointLock : order.accessories?.includes("3_point_lock") },
-                    { key: "puGasketing" as const, label: "PU Gasketing", checked: accObj ? !!accObj.puGasketing : order.accessories?.includes("pu_gasketing") },
-                    { key: "pattiGasketing" as const, label: "Patti Gasketing", checked: accObj ? !!accObj.pattiGasketing : order.accessories?.includes("patti_gasketing") },
-                  ];
-                  const otherValue = (accObj?.other ?? order.accessoriesOther)?.trim() || "—";
-                  return (
-                    <div className="pt-2 border-t border-border/50 space-y-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Accessories
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {accessoryItems.map(({ key, label, checked }) => (
-                          <div key={key} className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2">
-                            <div className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 ${checked ? "border-primary bg-primary" : "border-muted-foreground/50"}`}>
-                              {checked && <CheckCircle2 className="h-2.5 w-2.5 text-primary-foreground" />}
-                            </div>
-                            <span className="text-sm font-medium text-foreground">{label}</span>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="text-sm">
-                        <span className="text-muted-foreground">Any Other: </span>
-                        <span className="text-foreground">{otherValue}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
+                <DesignStageOrderFields
+                  readOnly={!showEditInputs}
+                  values={
+                    showEditInputs
+                      ? designFields
+                      : resolveDesignFormValues(completionData, order)
+                  }
+                  onChange={(patch) => setDesignFields((prev) => ({ ...prev, ...patch }))}
+                  fieldErrors={fieldErrors}
+                  workOrderNo={order.orderNo ?? "—"}
+                  orderDate={order.date}
+                />
               </div>
 
               {/* Images / Attachments (multi-file, S3 via presigned PUT) */}
@@ -1557,9 +1649,21 @@ export function StageDetailModal({
                 <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Remarks / Notes
                 </h4>
-                <p className="text-sm text-muted-foreground italic rounded-md border border-border/50 bg-muted/20 px-3 py-2">
-                  &ldquo;{completionData?.remarks ?? "—"}&rdquo;
-                </p>
+                {showEditInputs ? (
+                  <Textarea
+                    placeholder="Add remarks or notes for this stage..."
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    className="min-h-[72px] resize-none text-sm"
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground italic rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+                    &ldquo;{completionData?.remarks ?? "—"}&rdquo;
+                  </p>
+                )}
+                {fieldErrors.remarks && (
+                  <p className="text-xs text-destructive">{fieldErrors.remarks}</p>
+                )}
               </div>
             </>
           ) : (
@@ -1703,27 +1807,69 @@ export function StageDetailModal({
           )}
         </div>
 
-        <DialogFooter className="shrink-0 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-4 border-t border-border bg-muted/20">
-          <p className="text-xs text-muted-foreground order-2 sm:order-1">
+        <DialogFooter className="shrink-0 flex flex-col gap-3 px-4 sm:px-6 py-4 border-t border-border bg-muted/20 sm:flex-col sm:space-x-0">
+          <p className="text-xs text-muted-foreground w-full">
             Recorded by System • {recordedAt}
           </p>
-          <div className="flex gap-2 justify-end order-1 sm:order-2">
-            <Button variant="outline" onClick={() => handleClose(false)}>
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => handleClose(false)}
+            >
               Close
             </Button>
             {showEditInputs && onSave && (
-              <Button
-                onClick={handleSave}
-                disabled={saving || uploader.status === "uploading" || uploader.status === "has_errors"}
-              >
-                {(() => {
-                  if (saving) return "Saving...";
-                  if (uploader.status === "uploading") return "Uploading images...";
-                  if (isCombinedFabricationPowderCoating(stageKey) || isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey))
-                    return "Save Update";
-                  return "Save";
-                })()}
-              </Button>
+              stageKey === "sheet_processing" && mode === "complete" ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    onClick={() => handleSave("save_progress")}
+                    disabled={saving || uploader.status === "uploading" || uploader.status === "has_errors"}
+                  >
+                    {saving ? "Saving..." : uploader.status === "uploading" ? "Uploading..." : "Save progress"}
+                  </Button>
+                  <Button
+                    type="button"
+                    className="w-full sm:w-auto"
+                    onClick={() => handleSave("complete")}
+                    disabled={
+                      saving ||
+                      !statusOk ||
+                      uploader.status === "uploading" ||
+                      uploader.status === "has_errors"
+                    }
+                  >
+                    {saving ? (
+                      "Saving..."
+                    ) : uploader.status === "uploading" ? (
+                      "Uploading..."
+                    ) : (
+                      <>
+                        <span className="sm:hidden">Complete</span>
+                        <span className="hidden sm:inline">Complete &amp; continue</span>
+                      </>
+                    )}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  className="w-full sm:w-auto"
+                  onClick={() => handleSave()}
+                  disabled={saving || uploader.status === "uploading" || uploader.status === "has_errors"}
+                >
+                  {(() => {
+                    if (saving) return "Saving...";
+                    if (uploader.status === "uploading") return "Uploading...";
+                    if (mode === "edit") return "Save changes";
+                    if (isCombinedFabricationPowderCoating(stageKey) || isFabricationStage(stageKey) || isPowderCoatingOrDispatchStage(stageKey))
+                      return "Save & Next";
+                    return "Save & Next";
+                  })()}
+                </Button>
+              )
             )}
           </div>
         </DialogFooter>

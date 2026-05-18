@@ -39,6 +39,35 @@ type MockUser = {
 };
 let mockManagerUsers: MockUser[] = [];
 
+const MOCK_WO_SEQ_KEY = "mock_wo_seq";
+
+function getDateStringForWo(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}${m}${d}`;
+}
+
+/** Mock allocate: WO-YYYYMMDD-NNN (per-day sequence in sessionStorage). */
+function allocateMockWorkOrderNumber(): string {
+  const dateString = getDateStringForWo();
+  let state: { date: string; seq: number };
+  try {
+    const raw = sessionStorage.getItem(MOCK_WO_SEQ_KEY);
+    state = raw ? JSON.parse(raw) : { date: dateString, seq: 0 };
+  } catch {
+    state = { date: dateString, seq: 0 };
+  }
+  if (state.date !== dateString) {
+    state = { date: dateString, seq: 0 };
+  }
+  state.seq += 1;
+  sessionStorage.setItem(MOCK_WO_SEQ_KEY, JSON.stringify(state));
+  const seq = String(state.seq).padStart(3, "0");
+  return `WO-${dateString}-${seq}`;
+}
+
 export async function mockFetch(
   url: string,
   options?: { method?: string; body?: string; credentials?: string }
@@ -155,9 +184,60 @@ export async function mockFetch(
     // POST
     if (method === "POST") {
       const body = parseBody();
+      if (pathBase === "api/orders/work-order-number/next") {
+        const workOrderNumber = allocateMockWorkOrderNumber();
+        return jsonResponse({
+          success: true,
+          message: "Work order number generated successfully",
+          data: { workOrderNumber },
+        });
+      }
       if (pathBase === "api/orders" && body) {
-        const order = store.createOrder(body);
-        return jsonResponse(order, 201);
+        const wo = body.workOrderNumber as string | undefined;
+        if (!wo || typeof wo !== "string" || !wo.trim()) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "workOrderNumber is required. Call POST /api/orders/work-order-number/next first.",
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const used = store.getOrders().some((o) => o.orderNo === wo.trim());
+        if (used) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "Work order number already used",
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const party = body.partyId
+          ? store.getParties().find((p) => p.id === body.partyId)
+          : undefined;
+        const designer = body.designerId
+          ? store.getMembers().find((m) => m.id === body.designerId)
+          : undefined;
+        const order = store.createOrder({
+          orderNo: wo.trim(),
+          partyName: party?.name ?? body.partyName ?? "",
+          designerName: designer?.name ?? null,
+          panelType: body.panelType ?? null,
+          poNo: body.poNumber ?? body.poNo ?? null,
+          quantity: body.quantity ?? 0,
+          description: body.descriptionSize ?? body.description ?? null,
+          parts: body.partsCount != null ? String(body.partsCount) : null,
+          customerWoNo: body.panelName ?? body.customerWoNo ?? null,
+          powderCoatingType: body.coatingType === "DOUBLE" ? "double_coat" : "single_coat",
+          colorBody: body.colorDetails?.body ?? null,
+          colorMountingPlate: body.colorDetails?.mountingPlate ?? null,
+          colorBaseStand: body.colorDetails?.baseStand ?? null,
+          remarks: body.remarks ?? null,
+          stage: "design_preparation",
+          status: "in_progress",
+        });
+        return jsonResponse({ success: true, data: { ...order, workOrderNumber: order.orderNo, _id: order.id } }, 201);
       }
       if (pathBase === "api/members" && body) {
         const teamName = body.teamId

@@ -1,5 +1,6 @@
 import type { Order } from "@shared/schema";
 import type { StageCompletionData } from "@/components/stage-detail-modal";
+import { orderToDesignCompletionFallback } from "@/lib/design-stage-form";
 
 /** Order header + design data merged as baseline for Fabrication / Dispatch views and PDFs. */
 export function orderToDispatchCompletionFallback(order: Order): StageCompletionData {
@@ -91,6 +92,14 @@ export function getCompletionDataForStage(
   if (stageKey === "fabrication") {
     return {
       ...orderToDispatchCompletionFallback(order),
+      ...persistedHere,
+      ...sessionHere,
+    };
+  }
+
+  if (stageKey === "design_preparation") {
+    return {
+      ...orderToDesignCompletionFallback(order),
       ...persistedHere,
       ...sessionHere,
     };

@@ -106,8 +106,31 @@ export function getOrderByIdPath(orderId: string): string {
   return `/api/orders/${orderId}`;
 }
 
+/** Allocate next work order number (call once when create form opens). */
+export const ALLOCATE_WORK_ORDER_NUMBER_PATH = "/api/orders/work-order-number/next";
+
+export async function allocateWorkOrderNumber(): Promise<string> {
+  const { apiRequest } = await import("./queryClient");
+  const res = await apiRequest("POST", ALLOCATE_WORK_ORDER_NUMBER_PATH);
+  const json = (await res.json()) as {
+    success?: boolean;
+    message?: string;
+    data?: { workOrderNumber?: string };
+  };
+  const wo = json?.data?.workOrderNumber;
+  if (!json?.success || typeof wo !== "string" || !wo.trim()) {
+    throw new Error(json?.message ?? "Failed to allocate work order number");
+  }
+  return wo.trim();
+}
+
 export function getOrderStageUpdatePath(orderId: string, stageName: string): string {
   return `/api/orders/${orderId}/stage/${encodeURIComponent(stageName)}`;
+}
+
+/** PATCH stage data only — does not advance workflow */
+export function getOrderStageEditPath(orderId: string, stageName: string): string {
+  return `/api/orders/${orderId}/stage/${encodeURIComponent(stageName)}/edit`;
 }
 
 // --- Teams API (paths / query strings for use with apiRequest) ---
