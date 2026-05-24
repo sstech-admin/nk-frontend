@@ -40,7 +40,7 @@ import {
   getPanelCompletionDataForStage,
 } from "@/lib/stage-completion-merge";
 import {
-  applyOrderFromApiResponse,
+  resolveOrderDetailCacheUpdate,
   normalizeOrderDetail,
   type ApiOrderDetail,
 } from "@/lib/order-normalize";
@@ -49,6 +49,7 @@ import {
   type OrderDetailExtended,
   type PanelRecord,
 } from "@/lib/order-types";
+import { parseApiErrorMessage, userFacingApiError } from "@/lib/api-errors";
 import { savePanelStage } from "@/lib/panel-stage-save";
 import { isPanelCurrentStage } from "@/lib/panel-workflow";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -90,21 +91,6 @@ import {
 function formatLabel(s: string | undefined | null): string {
   if (s == null || s === "") return "";
   return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function parseApiErrorMessage(err: unknown): { status?: number; message: string } {
-  const raw = err instanceof Error ? err.message : String(err);
-  const m = raw.match(/^(\d+):\s*([\s\S]*)$/);
-  if (!m) return { message: raw };
-  const status = Number(m[1]);
-  let message = m[2].trim();
-  try {
-    const j = JSON.parse(m[2]);
-    message = (j.message as string) ?? (j.error as string) ?? message;
-  } catch {
-    // plain text body
-  }
-  return { status, message };
 }
 
 function getStatusStyle(status: string) {
@@ -673,13 +659,12 @@ export default function OrderDetailsPage() {
           }
           return !result.keepModalOpen;
         } catch (err) {
-          const { message } = parseApiErrorMessage(err);
           toast({
             title: "Panel stage update failed",
-            description: message,
+            description: userFacingApiError(err),
             variant: "destructive",
           });
-          throw err;
+          return false;
         }
       },
     [orderId, toast],
@@ -1049,11 +1034,11 @@ export default function OrderDetailsPage() {
               const res = await apiRequest("PATCH", patchPath(stageNameForApi), payload);
               json = await res.json();
             }
-            const updated = applyOrderFromApiResponse(json);
-            if (updated) {
+            const { order: updated, shouldSetCache } = resolveOrderDetailCacheUpdate(json);
+            if (shouldSetCache && updated) {
               queryClient.setQueryData(["order-detail", orderId], updated);
             } else {
-              queryClient.invalidateQueries({ queryKey: ["order-detail", orderId] });
+              await queryClient.invalidateQueries({ queryKey: ["order-detail", orderId] });
             }
             queryClient.invalidateQueries({ queryKey: ["orders-list"] });
             const successMessage = (json as { message?: string })?.message;
@@ -1134,11 +1119,11 @@ export default function OrderDetailsPage() {
             } else {
               toast({
                 title: isEditSave ? "Save failed" : "Stage update failed",
-                description: message || "Something went wrong",
+                description: userFacingApiError(err),
                 variant: "destructive",
               });
             }
-            throw err;
+            return false;
           }
         }
         const sheetStaysInProgress =

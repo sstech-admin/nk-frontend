@@ -260,10 +260,39 @@ export function normalizeOrderDetail(api: ApiOrderDetail): Order & OrderDetailEx
   } as Order & OrderDetailExtended;
 }
 
+/** PATCH panel stage responses return a panel document, not an order. */
+export function isApiPanelPayload(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  const hasPanelFields =
+    d.panelNo != null || d.panelStatus != null || d.serialLabel != null;
+  const hasOrderFields =
+    d.workOrderNumber != null ||
+    (d.partyId != null && d.quantity != null && d.panelNo == null);
+  return hasPanelFields && !hasOrderFields;
+}
+
+/** Panel-based orders need panels[] in cache; PATCH order responses often omit them. */
+export function orderDetailNeedsRefetch(order: Order & OrderDetailExtended): boolean {
+  const total = order.panelSummary?.total ?? 0;
+  if (total <= 0) return false;
+  return (order.panels?.length ?? 0) === 0;
+}
+
 export function applyOrderFromApiResponse(json: unknown): (Order & OrderDetailExtended) | null {
   const data = (json as { success?: boolean; data?: ApiOrderDetail })?.data;
-  if (!data) return null;
+  if (!data || isApiPanelPayload(data)) return null;
   return normalizeOrderDetail(data);
+}
+
+export function resolveOrderDetailCacheUpdate(json: unknown): {
+  order: (Order & OrderDetailExtended) | null;
+  shouldSetCache: boolean;
+} {
+  const order = applyOrderFromApiResponse(json);
+  if (!order) return { order: null, shouldSetCache: false };
+  if (orderDetailNeedsRefetch(order)) return { order, shouldSetCache: false };
+  return { order, shouldSetCache: true };
 }
 
 export function normalizeDispatchList(raw: unknown): DispatchRecord[] {

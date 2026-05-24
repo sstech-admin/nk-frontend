@@ -1,6 +1,5 @@
 import type { StageCompletionData } from "@/components/stage-detail-modal";
 import { buildStagePayloadForKey } from "@/lib/build-stage-payload";
-import { applyOrderFromApiResponse } from "@/lib/order-normalize";
 import {
   applyPanelSheetPayloadAdvanceRules,
   isPanelCurrentStage,
@@ -59,12 +58,8 @@ export async function savePanelStage(params: {
   const path = resolvePanelStagePatchPath(orderId, panel.id, stageKey, panel, saveMode);
   const res = await apiRequest("PATCH", path, payload);
   const json = await res.json();
-  const updated = applyOrderFromApiResponse(json);
-  if (updated) {
-    queryClient.setQueryData(["order-detail", orderId], updated);
-  } else {
-    queryClient.invalidateQueries({ queryKey: ["order-detail", orderId] });
-  }
+  // API returns a panel document; refetch full order (panels + summary + specs).
+  await queryClient.invalidateQueries({ queryKey: ["order-detail", orderId] });
   queryClient.invalidateQueries({ queryKey: ["orders-list"] });
 
   const sheetStaysInProgress =
