@@ -42,6 +42,7 @@ const orderFormSchema = z.object({
   designerName: z.string().min(1, "Designer name is required"),
   panelType: z.string().min(1, "Panel type is required"),
   poNo: z.string().optional(),
+  invoiceRef: z.string().optional(),
   quantity: z.coerce.number().min(1, "Quantity must be at least 1"),
   description: z.string().min(1, "Description is required"),
   parts: z.coerce.number().min(0, "Parts is required"),
@@ -258,6 +259,7 @@ export default function CreateOrderPage() {
       designerName: "",
       panelType: "",
       poNo: "",
+      invoiceRef: "",
       quantity: 1,
       description: "",
       parts: undefined,
@@ -289,6 +291,10 @@ export default function CreateOrderPage() {
         preparedBy,
         panelType: data.panelType?.trim() ?? "",
         poNumber: data.poNo?.trim() ?? undefined,
+        poReferences: data.poNo?.trim()
+          ? [{ poNumber: data.poNo.trim() }]
+          : undefined,
+        invoiceRef: data.invoiceRef?.trim() || undefined,
         quantity: Number(data.quantity) || 0,
         descriptionSize: data.description?.trim() ?? "",
         partsCount: Number(data.parts) || 0,
@@ -479,6 +485,15 @@ export default function CreateOrderPage() {
                   </FormItem>
                 )} />
 
+                <FormField control={form.control} name="invoiceRef" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Invoice ref</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="Optional invoice reference" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
                 <FormField control={form.control} name="poNo" render={({ field }) => (
                   <FormItem>
                     <FormLabel><RequiredLabel optional>P.O. No.</RequiredLabel></FormLabel>

@@ -102,8 +102,61 @@ export function getOrdersQueryPath(params: {
   return `/api/orders${q ? `?${q}` : ""}`;
 }
 
-export function getOrderByIdPath(orderId: string): string {
-  return `/api/orders/${orderId}`;
+export function getOrderByIdPath(
+  orderId: string,
+  options?: { includePanels?: boolean },
+): string {
+  const p = new URLSearchParams();
+  if (options?.includePanels) p.set("includePanels", "true");
+  const q = p.toString();
+  return `/api/orders/${orderId}${q ? `?${q}` : ""}`;
+}
+
+export function getOrderPanelsPath(
+  orderId: string,
+  params?: { panelStatus?: string; currentStage?: string },
+): string {
+  const p = new URLSearchParams();
+  if (params?.panelStatus) p.set("panelStatus", params.panelStatus);
+  if (params?.currentStage) p.set("currentStage", params.currentStage);
+  const q = p.toString();
+  return `/api/orders/${orderId}/panels${q ? `?${q}` : ""}`;
+}
+
+export function getPanelByIdPath(orderId: string, panelId: string): string {
+  return `/api/orders/${orderId}/panels/${panelId}`;
+}
+
+export function getPanelStageUpdatePath(
+  orderId: string,
+  panelId: string,
+  stageName: string,
+): string {
+  return `/api/orders/${orderId}/panels/${panelId}/stage/${encodeURIComponent(stageName)}`;
+}
+
+export function getPanelStageEditPath(
+  orderId: string,
+  panelId: string,
+  stageName: string,
+): string {
+  return `/api/orders/${orderId}/panels/${panelId}/stage/${encodeURIComponent(stageName)}/edit`;
+}
+
+export function getPanelBulkStageUpdatePath(orderId: string, stageName: string): string {
+  return `/api/orders/${orderId}/panels/bulk/stage/${encodeURIComponent(stageName)}`;
+}
+
+export function getPanelBulkStageEditPath(orderId: string, stageName: string): string {
+  return `/api/orders/${orderId}/panels/bulk/stage/${encodeURIComponent(stageName)}/edit`;
+}
+
+export function getOrderDispatchesPath(orderId: string): string {
+  return `/api/orders/${orderId}/dispatches`;
+}
+
+export function getDispatchByIdPath(orderId: string, dispatchId: string): string {
+  return `/api/orders/${orderId}/dispatches/${dispatchId}`;
 }
 
 /** Allocate next work order number (call once when create form opens). */

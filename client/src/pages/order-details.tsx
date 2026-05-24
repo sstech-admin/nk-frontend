@@ -35,16 +35,33 @@ import {
   USE_REAL_API,
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { getCompletionDataForStage } from "@/lib/stage-completion-merge";
+import {
+  getCompletionDataForStage,
+  getPanelCompletionDataForStage,
+} from "@/lib/stage-completion-merge";
+import {
+  applyOrderFromApiResponse,
+  normalizeOrderDetail,
+  type ApiOrderDetail,
+} from "@/lib/order-normalize";
+import {
+  isPanelBasedOrder,
+  type OrderDetailExtended,
+  type PanelRecord,
+} from "@/lib/order-types";
+import { savePanelStage } from "@/lib/panel-stage-save";
+import { isPanelCurrentStage } from "@/lib/panel-workflow";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PanelProductionTab } from "@/components/panel-production-tab";
+import { DispatchTab } from "@/components/dispatch-tab";
 import { exportStageCompletionPdf } from "@/lib/stage-pdf";
 import { stripAttachmentForWrite, type StageAttachment } from "@/lib/stage-uploads";
 import {
   qcFromStatusOk,
-  statusOkFromStageData,
   isOrderOnSheetProcessingStage,
   type SheetSaveIntent,
 } from "@/lib/order-stages";
-import { enrichDesignStageDataFromApi, buildDesignStagePatchPayload } from "@/lib/design-stage-form";
+import { buildDesignStagePatchPayload } from "@/lib/design-stage-form";
 import {
   timelineKeyToApiStageName,
   orderStageToTimelineKey,
@@ -88,175 +105,6 @@ function parseApiErrorMessage(err: unknown): { status?: number; message: string 
     // plain text body
   }
   return { status, message };
-}
-
-function applyOrderFromApiResponse(json: unknown): Order | null {
-  const data = (json as { success?: boolean; data?: ApiOrderDetail })?.data;
-  if (!data) return null;
-  return normalizeOrderDetail(data);
-}
-
-/** API order detail shape (partial). Supports both backend response (_id, panelName, ...) and stored app shape (id, customerWoNo, ...). */
-interface ApiOrderDetail {
-  _id?: string;
-  id?: string;
-  workOrderNumber?: string;
-  orderNo?: string;
-  partyId?: { partyName?: string };
-  partyName?: string;
-  status?: string;
-  currentStage?: string;
-  stage?: string;
-  panelType?: string;
-  quantity?: number;
-  descriptionSize?: string;
-  description?: string;
-  partsCount?: number;
-  parts?: string;
-  designerId?: { name?: string };
-  preparedBy?: { name?: string };
-  designerName?: string;
-  orderDate?: string;
-  createdAt?: string;
-  date?: string;
-  coatingType?: string;
-  powderCoatingType?: string;
-  pricing?: { ratePerKg?: number; includingAccessories?: boolean; extraCharges?: number };
-  rate?: string;
-  rateType?: string;
-  poNumber?: string;
-  poNo?: string;
-  remarks?: string;
-  panelName?: string;
-  customerWoNo?: string;
-  colorDetails?: { body?: string; mountingPlate?: string; baseStand?: string };
-  colorBody?: string;
-  colorMountingPlate?: string;
-  colorBaseStand?: string;
-  accessories?: {
-    pointLock?: boolean;
-    threePointLock?: boolean;
-    puGasketing?: boolean;
-    pattiGasketing?: boolean;
-    other?: string;
-  } | string[];
-  accessoriesOther?: string;
-  stages?: Array<{
-    name?: string;
-    stageStatus?: string;
-    data?: Record<string, unknown>;
-    startedAt?: string | null;
-    completedAt?: string | null;
-    remarks?: string;
-  }>;
-}
-
-/** "snake_case" → "camelCase" (used to hydrate StageCompletionData from API stage.data). */
-function snakeToCamel(s: string): string {
-  return s.replace(/_([a-z0-9])/g, (_m, ch: string) => ch.toUpperCase());
-}
-
-/** Convert API stage name (e.g. "FABRICATION", "DISPATCH_VALIDATION") to the timeline key used on the client. */
-function apiStageNameToKey(name: string | undefined | null): string | null {
-  if (!name) return null;
-  const norm = String(name).toLowerCase().replace(/\s+/g, "_");
-  if (norm === "design_preparation") return "design_preparation";
-  if (norm === "sheet_processing") return "sheet_processing";
-  if (norm === "fabrication" || norm === "powder_coating") return "fabrication";
-  if (norm === "dispatch_validation" || norm === "dispatch" || norm === "assembly_dispatch")
-    return "dispatch_validation";
-  return null;
-}
-
-/** Normalize a single stage.data object (snake_case from server) to the camelCase StageCompletionData shape. */
-function normalizeStageData(raw: Record<string, unknown> | undefined | null): Record<string, unknown> {
-  if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === undefined || v === null) continue;
-    out[snakeToCamel(k)] = v;
-  }
-  // Sheet processing QC: status or sheetStatus ("OK" | "NOT_OK", case-insensitive).
-  const qcRaw = out.status ?? out.sheetStatus;
-  if (out.statusOk === undefined && qcRaw != null && qcRaw !== "") {
-    out.statusOk = statusOkFromStageData({ status: qcRaw });
-  } else if (typeof out.status === "string" && out.statusOk === undefined) {
-    out.statusOk = statusOkFromStageData(out as Record<string, unknown>);
-  }
-  enrichDesignStageDataFromApi(out);
-  return out;
-}
-
-function normalizeOrderDetail(api: ApiOrderDetail): Order {
-  const status = (api.status ?? "").toLowerCase().replace(/\s+/g, "_");
-  const stage = (api.currentStage ?? api.stage ?? "").toLowerCase().replace(/\s+/g, "_");
-  const rateTypeDisplay =
-    api.rateType ??
-    (api.pricing?.includingAccessories === true ? "Include Accessories" : api.pricing ? "Extra" : undefined);
-  const accessoriesArray: string[] = [];
-  const acc = api.accessories;
-  if (acc && typeof acc === "object" && !Array.isArray(acc)) {
-    if (acc.pointLock) accessoriesArray.push("point_lock");
-    if (acc.threePointLock) accessoriesArray.push("3_point_lock");
-    if (acc.puGasketing) accessoriesArray.push("pu_gasketing");
-    if (acc.pattiGasketing) accessoriesArray.push("patti_gasketing");
-  }
-  const partyName =
-    typeof api.partyId === "object" && api.partyId?.partyName != null
-      ? api.partyId.partyName
-      : api.partyName ?? "";
-
-  // Hydrate saved stage data so Fabrication / Dispatch Validation / Sheet Processing
-  // modals (and PDFs) repopulate after a page reload. The backend stores each stage
-  // under `stages[i].data` using snake_case; we convert it to the camelCase
-  // StageCompletionData shape and key it by the timeline stage key.
-  const stagesMap: Record<string, Record<string, unknown>> = {};
-  const stagesStatus: Record<string, string> = {};
-  if (Array.isArray(api.stages)) {
-    for (const s of api.stages) {
-      const key = apiStageNameToKey(s?.name);
-      if (!key) continue;
-      const normalized = normalizeStageData(s?.data);
-      // Merge (FABRICATION stores a combined fabrication + powder-coating payload; keep both under "fabrication")
-      stagesMap[key] = { ...(stagesMap[key] ?? {}), ...normalized };
-      if (s?.stageStatus) stagesStatus[key] = String(s.stageStatus);
-      if (s?.completedAt && !stagesMap[key].completedDate) {
-        stagesMap[key].completedDate = String(s.completedAt).slice(0, 10);
-      }
-      if (s?.remarks && !stagesMap[key].remarks) stagesMap[key].remarks = s.remarks;
-    }
-  }
-
-  const currentStageApi = normalizeApiStageName(api.currentStage ?? api.stage);
-
-  return {
-    id: api._id ?? api.id ?? "",
-    orderNo: api.workOrderNumber ?? api.orderNo ?? api._id ?? api.id ?? "",
-    partyName,
-    status: status || "pending",
-    stage: stage || "design_preparation",
-    currentStageApi,
-    quantity: api.quantity ?? 0,
-    date: api.orderDate ?? api.createdAt ?? api.date ?? new Date().toISOString(),
-    panelType: api.panelType,
-    description: api.descriptionSize ?? api.description,
-    parts: api.partsCount != null ? String(api.partsCount) : api.parts,
-    designerName: api.designerId?.name ?? api.preparedBy?.name ?? api.designerName,
-    powderCoatingType: api.coatingType ?? api.powderCoatingType,
-    rate: api.pricing?.ratePerKg != null ? String(api.pricing.ratePerKg) : api.rate,
-    rateType: rateTypeDisplay,
-    poNo: api.poNumber ?? api.poNo,
-    remarks: api.remarks,
-    customerWoNo: api.panelName ?? api.customerWoNo,
-    colorBody: api.colorDetails?.body ?? api.colorBody,
-    colorMountingPlate: api.colorDetails?.mountingPlate ?? api.colorMountingPlate,
-    colorBaseStand: api.colorDetails?.baseStand ?? api.colorBaseStand,
-    accessories: accessoriesArray.length > 0 ? accessoriesArray : Array.isArray(acc) ? acc : undefined,
-    accessoriesOther: (typeof acc === "object" && !Array.isArray(acc) ? acc?.other : undefined) ?? api.accessoriesOther,
-    accessoriesObj: typeof acc === "object" && !Array.isArray(acc) ? acc : undefined,
-    stagesMap,
-    stagesStatus,
-  } as unknown as Order;
 }
 
 function getStatusStyle(status: string) {
@@ -343,6 +191,7 @@ function ProductionTimeline({
   onExportPdf,
   canUpdateCurrentStage = true,
   canShowEdit,
+  stagesFilter,
 }: {
   order: {
     stage: string;
@@ -356,19 +205,24 @@ function ProductionTimeline({
   onExportPdf: (stageKey: string, stageLabel: string) => void;
   canUpdateCurrentStage?: boolean;
   canShowEdit: (stageKey: string) => boolean;
+  stagesFilter?: (stageKey: string) => boolean;
 }) {
   const status = order.status;
   const currentStageKey = orderStageToTimelineKey(order.stage);
+  const visibleStages = stagesFilter
+    ? PRODUCTION_STAGES.filter((s) => stagesFilter(s.key))
+    : PRODUCTION_STAGES;
 
   return (
     <div className="space-y-0">
-      {PRODUCTION_STAGES.map((stage, i) => {
+      {visibleStages.map((stage, i) => {
         const uiState = getTimelineStageUiState(stage.key as TimelineStageKey, order);
         const stageApiStatus = order.stagesStatus?.[stage.key]?.toUpperCase();
         const isCompleted = uiState === "completed";
         const isCurrent = uiState === "current";
         const isPending = uiState === "pending";
-        const isLastStageAndOrderCompleted = status === "completed" && i === PRODUCTION_STAGES.length - 1;
+        const isLastStageAndOrderCompleted =
+          status === "completed" && i === visibleStages.length - 1;
         const isCancelled = uiState === "cancelled";
         const wasCleared =
           isPending &&
@@ -377,7 +231,7 @@ function ProductionTimeline({
           currentStageKey === "sheet_processing";
         const prevCompleted =
           i > 0 &&
-          getTimelineStageUiState(PRODUCTION_STAGES[i - 1].key as TimelineStageKey, order) === "completed";
+          getTimelineStageUiState(visibleStages[i - 1].key as TimelineStageKey, order) === "completed";
 
         let StageIcon = Circle;
         let iconColor = "text-muted-foreground/40";
@@ -413,7 +267,7 @@ function ProductionTimeline({
                   className={`h-5 w-5 ${iconColor} ${isCurrent && status === "in_progress" ? "animate-spin" : ""}`}
                 />
               </div>
-              {i < PRODUCTION_STAGES.length - 1 && (
+              {i < visibleStages.length - 1 && (
                 <div
                   className={`w-0.5 flex-1 min-h-[24px] ${prevCompleted || isCompleted ? lineColor : "bg-muted-foreground/15"}`}
                 />
@@ -534,7 +388,9 @@ export default function OrderDetailsPage() {
     key: string;
     label: string;
     mode: StageModalMode;
+    panel?: PanelRecord;
   } | null>(null);
+  const [detailTab, setDetailTab] = useState("order");
   const [stageCompletionMap, setStageCompletionMap] = useState<
     Record<string, StageCompletionData>
   >({});
@@ -542,6 +398,7 @@ export default function OrderDetailsPage() {
   const pendingSheetSaveRef = useRef<{
     stageKey: string;
     saveMode: "edit" | "complete";
+    panel?: PanelRecord;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     data: any;
     options?: { intent?: SheetSaveIntent };
@@ -579,7 +436,7 @@ export default function OrderDetailsPage() {
     enabled: !!orderId,
     queryFn: async () => {
       if (!orderId) throw new Error("No order id");
-      const path = getOrderByIdPath(orderId);
+      const path = getOrderByIdPath(orderId, { includePanels: true });
       const res = await apiRequest("GET", path);
       const json = await res.json();
       if (USE_REAL_API) {
@@ -746,6 +603,86 @@ export default function OrderDetailsPage() {
       setStageModalOpen(true);
     },
     [order, toast],
+  );
+
+  const extendedOrder = order as (Order & OrderDetailExtended) | undefined;
+  const isPanelOrder = extendedOrder ? isPanelBasedOrder(extendedOrder) : false;
+  const orderPanels = extendedOrder?.panels ?? [];
+
+  const openPanelViewStage = useCallback(
+    (panel: PanelRecord, stageKey: string, stageLabel: string) => {
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "view", panel });
+      setStageModalOpen(true);
+    },
+    [],
+  );
+
+  const openPanelEditStage = useCallback(
+    (panel: PanelRecord, stageKey: string, stageLabel: string) => {
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "edit", panel });
+      setStageModalOpen(true);
+    },
+    [],
+  );
+
+  const openPanelUpdateStage = useCallback(
+    (panel: PanelRecord, stageKey: string, stageLabel: string) => {
+      if (!isPanelCurrentStage(panel, stageKey)) {
+        toast({
+          title: "Not the current stage",
+          description: `Use Edit to update ${stageLabel} for panel ${panel.panelNo}.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "complete", panel });
+      setStageModalOpen(true);
+    },
+    [toast],
+  );
+
+  const handlePanelStageSave = useCallback(
+    (panel: PanelRecord, stageKey: string, saveMode: "edit" | "complete") =>
+      async (
+        data: StageCompletionData,
+        options?: { intent?: SheetSaveIntent; confirmedRegression?: boolean },
+      ): Promise<boolean> => {
+        if (!orderId) return true;
+        try {
+          const result = await savePanelStage({
+            orderId,
+            panel,
+            stageKey,
+            saveMode,
+            data,
+            options,
+            onRegressionRequired: () => {
+              pendingSheetSaveRef.current = { stageKey, saveMode, data, options, panel };
+              setSheetRegressionOpen(true);
+            },
+          });
+          if (!result.ok) return false;
+          const mapKey = `${panel.id}:${stageKey}`;
+          setStageCompletionMap((prev) => ({
+            ...prev,
+            [mapKey]: { ...prev[mapKey], ...data, recordedAt: new Date().toISOString() },
+          }));
+          if (!result.keepModalOpen) setStageModalOpen(false);
+          if (result.message) {
+            toast({ title: "Saved", description: result.message });
+          }
+          return !result.keepModalOpen;
+        } catch (err) {
+          const { message } = parseApiErrorMessage(err);
+          toast({
+            title: "Panel stage update failed",
+            description: message,
+            variant: "destructive",
+          });
+          throw err;
+        }
+      },
+    [orderId, toast],
   );
 
   const handleStageSave = useCallback(
@@ -1306,6 +1243,14 @@ export default function OrderDetailsPage() {
 
   const stageModalCompletionData = useMemo((): StageCompletionData | null => {
     if (!selectedStage || !order) return null;
+    if (selectedStage.panel) {
+      return getPanelCompletionDataForStage(
+        selectedStage.key,
+        order,
+        selectedStage.panel,
+        stageCompletionMap,
+      );
+    }
     return getCompletionDataForStage(selectedStage.key, order, stageCompletionMap);
   }, [selectedStage, stageCompletionMap, order]);
 
@@ -1488,7 +1433,14 @@ export default function OrderDetailsPage() {
                   label="Product"
                   value={order.panelType ?? undefined}
                 />
-                <SpecField label="Quantity" value={order.quantity} />
+                <SpecField
+                  label="Quantity"
+                  value={
+                    isPanelOrder && extendedOrder?.dispatchedQuantity != null
+                      ? `${extendedOrder.dispatchedQuantity} / ${order.quantity} dispatched`
+                      : order.quantity
+                  }
+                />
                 <SpecField
                   label="Description (Size)"
                   value={order.description ?? undefined}
@@ -1540,30 +1492,91 @@ export default function OrderDetailsPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardContent className="p-4 sm:p-6">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-5">
-                Production Timeline
-              </h3>
-              <ProductionTimeline
-                order={{
-                  stage: order.stage,
-                  status: order.status,
-                  currentStageApi: (order as { currentStageApi?: string }).currentStageApi,
-                  stagesStatus: (order as { stagesStatus?: Record<string, string> }).stagesStatus,
-                }}
-                onViewStage={openViewStage}
-                onEditStage={openEditStage}
-                onUpdateStage={openUpdateStage}
-                onExportPdf={handleExportPdf}
-                canShowEdit={canShowEditButton}
-                canUpdateCurrentStage={(() => {
-                  const currentKey = orderStageToTimelineKey(order.stage);
-                  return canEditStage(currentKey);
-                })()}
-              />
-            </CardContent>
-          </Card>
+          <Tabs value={detailTab} onValueChange={setDetailTab} className="w-full">
+            <TabsList className="mb-4 flex-wrap h-auto">
+              <TabsTrigger value="order">Order &amp; Design</TabsTrigger>
+              {isPanelOrder && (
+                <>
+                  <TabsTrigger value="panels">Panels</TabsTrigger>
+                  <TabsTrigger value="dispatches">Dispatches</TabsTrigger>
+                </>
+              )}
+            </TabsList>
+            <TabsContent value="order">
+              <Card>
+                <CardContent className="p-4 sm:p-6">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-5">
+                    {isPanelOrder ? "Design (order level)" : "Production Timeline"}
+                  </h3>
+                  {isPanelOrder ? (
+                    <ProductionTimeline
+                      order={{
+                        stage: order.stage,
+                        status: order.status,
+                        currentStageApi: extendedOrder?.currentStageApi,
+                        stagesStatus: extendedOrder?.stagesStatus,
+                      }}
+                      onViewStage={openViewStage}
+                      onEditStage={openEditStage}
+                      onUpdateStage={openUpdateStage}
+                      onExportPdf={handleExportPdf}
+                      canShowEdit={canShowEditButton}
+                      canUpdateCurrentStage={canEditStage("design_preparation")}
+                      stagesFilter={(key) => key === "design_preparation"}
+                    />
+                  ) : (
+                    <ProductionTimeline
+                      order={{
+                        stage: order.stage,
+                        status: order.status,
+                        currentStageApi: extendedOrder?.currentStageApi,
+                        stagesStatus: extendedOrder?.stagesStatus,
+                      }}
+                      onViewStage={openViewStage}
+                      onEditStage={openEditStage}
+                      onUpdateStage={openUpdateStage}
+                      onExportPdf={handleExportPdf}
+                      canShowEdit={canShowEditButton}
+                      canUpdateCurrentStage={(() => {
+                        const currentKey = orderStageToTimelineKey(order.stage);
+                        return canEditStage(currentKey);
+                      })()}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+            {isPanelOrder && (
+              <>
+                <TabsContent value="panels">
+                  <Card>
+                    <CardContent className="p-4 sm:p-6">
+                      <PanelProductionTab
+                        order={extendedOrder!}
+                        panels={orderPanels}
+                        panelSummary={extendedOrder?.panelSummary}
+                        canEditStage={canEditStage}
+                        onViewStage={openPanelViewStage}
+                        onEditStage={openPanelEditStage}
+                        onUpdateStage={openPanelUpdateStage}
+                      />
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                <TabsContent value="dispatches">
+                  <Card>
+                    <CardContent className="p-4 sm:p-6">
+                      <DispatchTab
+                        orderId={orderId!}
+                        panels={orderPanels}
+                        poReferences={extendedOrder?.poReferences}
+                      />
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+              </>
+            )}
+          </Tabs>
         </div>
 
         {/* Right column: Summary (color tags + remarks) + Files & Attachments */}
@@ -1621,8 +1634,9 @@ export default function OrderDetailsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Return order to Sheet Processing?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will send the order back to Sheet Processing and clear Fabrication and Dispatch
-              data. Continue?
+              {pendingSheetSaveRef.current?.panel
+                ? "This will return the panel to Sheet Processing and clear later stage data. Continue?"
+                : "This will send the order back to Sheet Processing and clear Fabrication and Dispatch data. Continue?"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1632,10 +1646,18 @@ export default function OrderDetailsPage() {
                 const pending = pendingSheetSaveRef.current;
                 setSheetRegressionOpen(false);
                 if (!pending || !order) return;
-                void handleStageSave(pending.stageKey, pending.saveMode)(pending.data, {
-                  ...pending.options,
-                  confirmedRegression: true,
-                });
+                if (pending.panel) {
+                  void handlePanelStageSave(
+                    pending.panel,
+                    pending.stageKey,
+                    pending.saveMode,
+                  )(pending.data, { ...pending.options, confirmedRegression: true });
+                } else {
+                  void handleStageSave(pending.stageKey, pending.saveMode)(pending.data, {
+                    ...pending.options,
+                    confirmedRegression: true,
+                  });
+                }
                 pendingSheetSaveRef.current = null;
               }}
             >
@@ -1651,9 +1673,17 @@ export default function OrderDetailsPage() {
           onOpenChange={setStageModalOpen}
           order={order}
           stageKey={selectedStage.key}
-          stageLabel={selectedStage.label}
+          stageLabel={
+            selectedStage.panel
+              ? `${selectedStage.label} — Panel ${selectedStage.panel.panelNo}`
+              : selectedStage.label
+          }
           mode={selectedStage.mode}
-          isOrderCurrentStage={isTimelineStageCurrent(order, selectedStage.key)}
+          isOrderCurrentStage={
+            selectedStage.panel
+              ? isPanelCurrentStage(selectedStage.panel, selectedStage.key)
+              : isTimelineStageCurrent(order, selectedStage.key)
+          }
           completionData={stageModalCompletionData}
           isAuthorized={
             selectedStage.mode === "view"
@@ -1673,10 +1703,16 @@ export default function OrderDetailsPage() {
           onSave={
             selectedStage.mode === "view"
               ? undefined
-              : handleStageSave(
-                  selectedStage.key,
-                  selectedStage.mode === "edit" ? "edit" : "complete",
-                )
+              : selectedStage.panel
+                ? handlePanelStageSave(
+                    selectedStage.panel,
+                    selectedStage.key,
+                    selectedStage.mode === "edit" ? "edit" : "complete",
+                  )
+                : handleStageSave(
+                    selectedStage.key,
+                    selectedStage.mode === "edit" ? "edit" : "complete",
+                  )
           }
         />
       )}

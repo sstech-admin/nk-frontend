@@ -65,6 +65,30 @@ function withoutAttachments(data: StageCompletionData): StageCompletionData {
  *   3. Server-persisted `fabrication` snapshot (dispatch stage reuses it)
  *   4. In-session saves from `stageCompletionMap` (most recent edit wins)
  */
+/** Panel production modals: merge order baseline with panel `stagesMap` and per-panel session map. */
+export function getPanelCompletionDataForStage(
+  stageKey: string,
+  order: Order,
+  panel: { id: string; stagesMap?: Record<string, Record<string, unknown>> },
+  map: Record<string, StageCompletionData>,
+): StageCompletionData | null {
+  const panelOrder = {
+    ...order,
+    stagesMap: {
+      ...((order as { stagesMap?: Record<string, Record<string, unknown>> }).stagesMap ?? {}),
+      ...(panel.stagesMap ?? {}),
+    },
+  } as Order;
+  const sessionMap: Record<string, StageCompletionData> = { ...map };
+  const panelKey = `${panel.id}:${stageKey}`;
+  if (map[panelKey]) sessionMap[stageKey] = map[panelKey];
+  const panelFabKey = `${panel.id}:fabrication`;
+  if (stageKey === "dispatch_validation" && map[panelFabKey]) {
+    sessionMap.fabrication = { ...sessionMap.fabrication, ...map[panelFabKey] };
+  }
+  return getCompletionDataForStage(stageKey, panelOrder, sessionMap);
+}
+
 export function getCompletionDataForStage(
   stageKey: string,
   order: Order | undefined,
