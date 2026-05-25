@@ -50,7 +50,7 @@ import {
   type PanelRecord,
 } from "@/lib/order-types";
 import { parseApiErrorMessage, userFacingApiError } from "@/lib/api-errors";
-import { savePanelStage } from "@/lib/panel-stage-save";
+import { savePanelBulkStage, savePanelStage } from "@/lib/panel-stage-save";
 import { isPanelCurrentStage } from "@/lib/panel-workflow";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PanelProductionTab } from "@/components/panel-production-tab";
@@ -375,8 +375,10 @@ export default function OrderDetailsPage() {
     label: string;
     mode: StageModalMode;
     panel?: PanelRecord;
+    panels?: PanelRecord[];
   } | null>(null);
   const [detailTab, setDetailTab] = useState("order");
+  const [panelSelectionReset, setPanelSelectionReset] = useState(0);
   const [stageCompletionMap, setStageCompletionMap] = useState<
     Record<string, StageCompletionData>
   >({});
@@ -385,6 +387,7 @@ export default function OrderDetailsPage() {
     stageKey: string;
     saveMode: "edit" | "complete";
     panel?: PanelRecord;
+    panels?: PanelRecord[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     data: any;
     options?: { intent?: SheetSaveIntent };
@@ -627,6 +630,33 @@ export default function OrderDetailsPage() {
     [toast],
   );
 
+  const openPanelBulkEditStage = useCallback(
+    (panels: PanelRecord[], stageKey: string, stageLabel: string) => {
+      if (panels.length === 0) return;
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "edit", panels });
+      setStageModalOpen(true);
+    },
+    [],
+  );
+
+  const openPanelBulkCompleteStage = useCallback(
+    (panels: PanelRecord[], stageKey: string, stageLabel: string) => {
+      if (panels.length === 0) return;
+      const notAtStage = panels.filter((p) => !isPanelCurrentStage(p, stageKey));
+      if (notAtStage.length > 0) {
+        toast({
+          title: "Cannot bulk complete",
+          description: `All selected panels must be at ${stageLabel}. Panel ${notAtStage[0].panelNo} is not.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "complete", panels });
+      setStageModalOpen(true);
+    },
+    [toast],
+  );
+
   const handlePanelStageSave = useCallback(
     (panel: PanelRecord, stageKey: string, saveMode: "edit" | "complete") =>
       async (
@@ -661,6 +691,59 @@ export default function OrderDetailsPage() {
         } catch (err) {
           toast({
             title: "Panel stage update failed",
+            description: userFacingApiError(err),
+            variant: "destructive",
+          });
+          return false;
+        }
+      },
+    [orderId, toast],
+  );
+
+  const handlePanelBulkStageSave = useCallback(
+    (panels: PanelRecord[], stageKey: string, saveMode: "edit" | "complete") =>
+      async (
+        data: StageCompletionData,
+        options?: { intent?: SheetSaveIntent; confirmedRegression?: boolean },
+      ): Promise<boolean> => {
+        if (!orderId || panels.length === 0) return true;
+        try {
+          const result = await savePanelBulkStage({
+            orderId,
+            panels,
+            stageKey,
+            saveMode,
+            data,
+            options,
+            onRegressionRequired: () => {
+              pendingSheetSaveRef.current = { stageKey, saveMode, data, options, panels };
+              setSheetRegressionOpen(true);
+            },
+          });
+          if (!result.ok) return false;
+          const recordedAt = new Date().toISOString();
+          setStageCompletionMap((prev) => {
+            const next = { ...prev };
+            for (const panel of panels) {
+              const mapKey = `${panel.id}:${stageKey}`;
+              next[mapKey] = { ...next[mapKey], ...data, recordedAt };
+            }
+            return next;
+          });
+          setPanelSelectionReset((n) => n + 1);
+          if (!result.keepModalOpen) {
+            setStageModalOpen(false);
+          }
+          toast({
+            title: "Saved",
+            description:
+              result.message ??
+              `${result.updated ?? panels.length} panel(s) updated successfully`,
+          });
+          return !result.keepModalOpen;
+        } catch (err) {
+          toast({
+            title: "Bulk panel update failed",
             description: userFacingApiError(err),
             variant: "destructive",
           });
@@ -1228,11 +1311,12 @@ export default function OrderDetailsPage() {
 
   const stageModalCompletionData = useMemo((): StageCompletionData | null => {
     if (!selectedStage || !order) return null;
-    if (selectedStage.panel) {
+    const panelForData = selectedStage.panel ?? selectedStage.panels?.[0];
+    if (panelForData) {
       return getPanelCompletionDataForStage(
         selectedStage.key,
         order,
-        selectedStage.panel,
+        panelForData,
         stageCompletionMap,
       );
     }
@@ -1347,7 +1431,7 @@ export default function OrderDetailsPage() {
 
   return (
     <div
-      className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6"
+      className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6 min-w-0 overflow-x-hidden"
       data-testid="order-details-page"
     >
       {/* Header: back, order id, status, party name, current stage pill */}
@@ -1540,10 +1624,13 @@ export default function OrderDetailsPage() {
                         order={extendedOrder!}
                         panels={orderPanels}
                         panelSummary={extendedOrder?.panelSummary}
+                        selectionResetKey={panelSelectionReset}
                         canEditStage={canEditStage}
                         onViewStage={openPanelViewStage}
                         onEditStage={openPanelEditStage}
                         onUpdateStage={openPanelUpdateStage}
+                        onBulkEditStage={openPanelBulkEditStage}
+                        onBulkCompleteStage={openPanelBulkCompleteStage}
                       />
                     </CardContent>
                   </Card>
@@ -1619,9 +1706,11 @@ export default function OrderDetailsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Return order to Sheet Processing?</AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingSheetSaveRef.current?.panel
-                ? "This will return the panel to Sheet Processing and clear later stage data. Continue?"
-                : "This will send the order back to Sheet Processing and clear Fabrication and Dispatch data. Continue?"}
+              {pendingSheetSaveRef.current?.panels?.length
+                ? `This will return ${pendingSheetSaveRef.current.panels.length} panel(s) to Sheet Processing and clear later stage data. Continue?`
+                : pendingSheetSaveRef.current?.panel
+                  ? "This will return the panel to Sheet Processing and clear later stage data. Continue?"
+                  : "This will send the order back to Sheet Processing and clear Fabrication and Dispatch data. Continue?"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1631,7 +1720,13 @@ export default function OrderDetailsPage() {
                 const pending = pendingSheetSaveRef.current;
                 setSheetRegressionOpen(false);
                 if (!pending || !order) return;
-                if (pending.panel) {
+                if (pending.panels?.length) {
+                  void handlePanelBulkStageSave(
+                    pending.panels,
+                    pending.stageKey,
+                    pending.saveMode,
+                  )(pending.data, { ...pending.options, confirmedRegression: true });
+                } else if (pending.panel) {
                   void handlePanelStageSave(
                     pending.panel,
                     pending.stageKey,
@@ -1659,15 +1754,21 @@ export default function OrderDetailsPage() {
           order={order}
           stageKey={selectedStage.key}
           stageLabel={
-            selectedStage.panel
-              ? `${selectedStage.label} — Panel ${selectedStage.panel.panelNo}`
-              : selectedStage.label
+            selectedStage.panels?.length
+              ? `${selectedStage.label} — ${selectedStage.panels.length} panels`
+              : selectedStage.panel
+                ? `${selectedStage.label} — Panel ${selectedStage.panel.panelNo}`
+                : selectedStage.label
           }
           mode={selectedStage.mode}
           isOrderCurrentStage={
-            selectedStage.panel
-              ? isPanelCurrentStage(selectedStage.panel, selectedStage.key)
-              : isTimelineStageCurrent(order, selectedStage.key)
+            selectedStage.panels?.length
+              ? selectedStage.panels.every((p) =>
+                  isPanelCurrentStage(p, selectedStage.key),
+                )
+              : selectedStage.panel
+                ? isPanelCurrentStage(selectedStage.panel, selectedStage.key)
+                : isTimelineStageCurrent(order, selectedStage.key)
           }
           completionData={stageModalCompletionData}
           isAuthorized={
@@ -1688,16 +1789,22 @@ export default function OrderDetailsPage() {
           onSave={
             selectedStage.mode === "view"
               ? undefined
-              : selectedStage.panel
-                ? handlePanelStageSave(
-                    selectedStage.panel,
+              : selectedStage.panels?.length
+                ? handlePanelBulkStageSave(
+                    selectedStage.panels,
                     selectedStage.key,
                     selectedStage.mode === "edit" ? "edit" : "complete",
                   )
-                : handleStageSave(
-                    selectedStage.key,
-                    selectedStage.mode === "edit" ? "edit" : "complete",
-                  )
+                : selectedStage.panel
+                  ? handlePanelStageSave(
+                      selectedStage.panel,
+                      selectedStage.key,
+                      selectedStage.mode === "edit" ? "edit" : "complete",
+                    )
+                  : handleStageSave(
+                      selectedStage.key,
+                      selectedStage.mode === "edit" ? "edit" : "complete",
+                    )
           }
         />
       )}

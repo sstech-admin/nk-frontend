@@ -6,6 +6,7 @@ import {
 } from "@/lib/api";
 import { QC_NOT_OK, type SheetSaveIntent, type SheetProcessingQcStatus } from "@/lib/order-stages";
 import type { PanelProductionStageApi, PanelRecord } from "@/lib/order-types";
+import { timelineKeyToPanelProductionStage } from "@/lib/order-types";
 import { normalizeApiStageName } from "@/lib/order-workflow";
 
 export type PanelSaveMode = "edit" | "complete";
@@ -90,4 +91,31 @@ export function panelCanEditProduction(panel: PanelRecord): boolean {
 
 export function panelStatusLabel(status: string): string {
   return String(status).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function findPanelStageRecord(panel: PanelRecord, stageKey: string) {
+  const apiName = timelineKeyToPanelProductionStage(stageKey);
+  return panel.stages?.find((s) => String(s.name ?? "").toUpperCase() === apiName);
+}
+
+/** Eligible for bulk complete — must be at this stage now. */
+export function panelCanBulkCompleteAtStage(panel: PanelRecord, stageKey: string): boolean {
+  return panelCanEditProduction(panel) && isPanelCurrentStage(panel, stageKey);
+}
+
+/** Eligible for bulk edit — stage has been started (not PENDING). */
+export function panelCanBulkEditAtStage(panel: PanelRecord, stageKey: string): boolean {
+  if (!panelCanEditProduction(panel)) return false;
+  const stage = findPanelStageRecord(panel, stageKey);
+  if (!stage) return isPanelCurrentStage(panel, stageKey);
+  return String(stage.stageStatus ?? "").toUpperCase() !== "PENDING";
+}
+
+export function shouldConfirmBulkPanelSheetRegression(
+  stageKey: string,
+  panels: PanelRecord[],
+  statusOk: boolean,
+): boolean {
+  if (stageKey !== "sheet_processing" || statusOk) return false;
+  return panels.some((p) => shouldConfirmPanelSheetRegression(stageKey, p, false));
 }
