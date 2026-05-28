@@ -29,6 +29,7 @@ interface ApiOrderItem {
   status?: string;
   currentStage?: string;
   quantity?: number;
+  dispatchedQuantity?: number;
   orderDate?: string;
   createdAt?: string;
 }
@@ -52,7 +53,8 @@ function normalizeOrder(api: ApiOrderItem): Order {
     stage: (api.currentStage ?? "").toLowerCase().replace(/\s+/g, "_") || "pending",
     quantity: api.quantity ?? 0,
     date: api.orderDate ?? api.createdAt ?? new Date().toISOString(),
-  };
+    dispatchedQuantity: api.dispatchedQuantity,
+  } as Order & { dispatchedQuantity?: number };
 }
 
 function ensureOrderArray(raw: unknown): Order[] {
@@ -91,6 +93,7 @@ function getStatusClasses(status: string) {
     case "in_progress": return { dot: "bg-yellow-500", text: "text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-950/40", border: "border-yellow-200 dark:border-yellow-800" };
     case "on_hold": return { dot: "bg-orange-500", text: "text-orange-700 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/40", border: "border-orange-200 dark:border-orange-800" };
     case "cancelled": return { dot: "bg-red-500", text: "text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40", border: "border-red-200 dark:border-red-800" };
+    case "partially_dispatched": return { dot: "bg-sky-500", text: "text-sky-700 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/40", border: "border-sky-200 dark:border-sky-800" };
     default: return { dot: "bg-muted-foreground", text: "text-muted-foreground bg-muted", border: "border-border" };
   }
 }
@@ -165,7 +168,14 @@ function OrderCard({ order, onDelete }: { order: Order; onDelete: (id: string) =
       <div className="mt-4 flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <Hash className="h-3 w-3" />
-          <span>Qty: <span className="font-medium text-foreground" data-testid={`text-qty-${order.id}`}>{order.quantity}</span></span>
+          <span>Qty:{" "}
+            <span className="font-medium text-foreground" data-testid={`text-qty-${order.id}`}>
+              {(order as { dispatchedQuantity?: number }).dispatchedQuantity != null &&
+              order.status === "partially_dispatched"
+                ? `${(order as { dispatchedQuantity?: number }).dispatchedQuantity}/${order.quantity}`
+                : order.quantity}
+            </span>
+          </span>
         </div>
         <div className="flex items-center gap-1.5">
           <Calendar className="h-3 w-3" />
@@ -302,6 +312,9 @@ export default function OrdersPage() {
     completed: ordersForCounts.filter((o) => (o.status ?? "").toLowerCase() === "completed").length,
     on_hold: ordersForCounts.filter((o) => (o.status ?? "").toLowerCase() === "on_hold").length,
     cancelled: ordersForCounts.filter((o) => (o.status ?? "").toLowerCase() === "cancelled").length,
+    partially_dispatched: ordersForCounts.filter(
+      (o) => (o.status ?? "").toLowerCase() === "partially_dispatched",
+    ).length,
   };
 
   const deleteMutation = useMutation({
@@ -320,6 +333,11 @@ export default function OrdersPage() {
     { label: "Completed", value: "completed", count: statusCounts.completed },
     { label: "On Hold", value: "on_hold", count: statusCounts.on_hold },
     { label: "Cancelled", value: "cancelled", count: statusCounts.cancelled },
+    {
+      label: "Partially dispatched",
+      value: "partially_dispatched",
+      count: statusCounts.partially_dispatched,
+    },
   ];
 
   return (

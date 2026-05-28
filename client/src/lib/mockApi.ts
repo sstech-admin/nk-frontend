@@ -27,6 +27,86 @@ function now() {
 }
 
 const ALLOWED_STAGES = ["DESIGN_PREPARATION", "SHEET_PROCESSING", "FABRICATION", "DISPATCH_VALIDATION"] as const;
+
+type MockPanel = {
+  _id: string;
+  panelNo: number;
+  serialLabel?: string;
+  currentStage: string;
+  panelStatus: string;
+  stages: Array<{ name: string; stageStatus: string; data?: Record<string, unknown> }>;
+};
+
+const mockPanelsByOrder = new Map<string, MockPanel[]>();
+const mockDispatchesByOrder = new Map<
+  string,
+  Array<{
+    _id: string;
+    createdAt: string;
+    vehicleNumber?: string;
+    poReference?: string;
+    remarks?: string;
+    panelIds?: string[];
+    panelNumbers?: number[];
+  }>
+>();
+
+function ensureMockPanels(orderId: string, quantity: number): MockPanel[] {
+  let panels = mockPanelsByOrder.get(orderId);
+  if (panels && panels.length === quantity) return panels;
+  panels = Array.from({ length: Math.max(quantity, 0) }, (_, i) => ({
+    _id: `mock-panel-${orderId}-${i + 1}`,
+    panelNo: i + 1,
+    serialLabel: `P${String(i + 1).padStart(3, "0")}`,
+    currentStage: "SHEET_PROCESSING",
+    panelStatus: "IN_PROGRESS",
+    stages: [],
+  }));
+  mockPanelsByOrder.set(orderId, panels);
+  return panels;
+}
+
+function buildMockPanelSummary(panels: MockPanel[], total: number) {
+  const summary = {
+    total,
+    dispatched: 0,
+    readyToDispatch: 0,
+    inProgress: 0,
+    onHold: 0,
+    byStage: {} as Record<string, number>,
+    byStatus: {} as Record<string, number>,
+  };
+  for (const p of panels) {
+    summary.byStatus[p.panelStatus] = (summary.byStatus[p.panelStatus] ?? 0) + 1;
+    summary.byStage[p.currentStage] = (summary.byStage[p.currentStage] ?? 0) + 1;
+    if (p.panelStatus === "DISPATCHED") summary.dispatched += 1;
+    else if (p.panelStatus === "READY_TO_DISPATCH") summary.readyToDispatch += 1;
+    else if (p.panelStatus === "ON_HOLD") summary.onHold += 1;
+    else if (p.panelStatus === "IN_PROGRESS") summary.inProgress += 1;
+  }
+  return summary;
+}
+
+function enrichMockOrderResponse(order: Record<string, unknown>, includePanels: boolean) {
+  const id = String(order.id ?? order._id ?? "");
+  const qty = Number(order.quantity) || 0;
+  if (!includePanels || qty < 1) {
+    return { success: true, data: { ...order, _id: id, panelSummary: { total: 0, dispatched: 0, readyToDispatch: 0, inProgress: 0, onHold: 0 } } };
+  }
+  const panels = ensureMockPanels(id, qty);
+  const panelSummary = buildMockPanelSummary(panels, qty);
+  return {
+    success: true,
+    data: {
+      ...order,
+      _id: id,
+      workOrderNumber: order.orderNo ?? order.workOrderNumber,
+      panelSummary,
+      panels,
+      dispatchedQuantity: panelSummary.dispatched,
+    },
+  };
+}
 type MockUser = {
   _id: string;
   name: string;
@@ -38,6 +118,35 @@ type MockUser = {
   updatedAt: string;
 };
 let mockManagerUsers: MockUser[] = [];
+
+const MOCK_WO_SEQ_KEY = "mock_wo_seq";
+
+function getDateStringForWo(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}${m}${d}`;
+}
+
+/** Mock allocate: WO-YYYYMMDD-NNN (per-day sequence in sessionStorage). */
+function allocateMockWorkOrderNumber(): string {
+  const dateString = getDateStringForWo();
+  let state: { date: string; seq: number };
+  try {
+    const raw = sessionStorage.getItem(MOCK_WO_SEQ_KEY);
+    state = raw ? JSON.parse(raw) : { date: dateString, seq: 0 };
+  } catch {
+    state = { date: dateString, seq: 0 };
+  }
+  if (state.date !== dateString) {
+    state = { date: dateString, seq: 0 };
+  }
+  state.seq += 1;
+  sessionStorage.setItem(MOCK_WO_SEQ_KEY, JSON.stringify(state));
+  const seq = String(state.seq).padStart(3, "0");
+  return `WO-${dateString}-${seq}`;
+}
 
 export async function mockFetch(
   url: string,
@@ -71,7 +180,13 @@ export async function mockFetch(
       if (orderMatch) {
         const order = store.getOrder(orderMatch[1]);
         if (!order) return new Response(JSON.stringify({ message: "Order not found" }), { status: 404 });
-        return jsonResponse(order);
+        const includePanels = searchParams?.get("includePanels") === "true";
+        return jsonResponse(enrichMockOrderResponse(order as unknown as Record<string, unknown>, includePanels));
+      }
+      const dispatchesMatch = pathBase.match(/^api\/orders\/([^/]+)\/dispatches$/);
+      if (dispatchesMatch) {
+        const list = mockDispatchesByOrder.get(dispatchesMatch[1]) ?? [];
+        return jsonResponse({ success: true, data: list });
       }
       if (pathBase === "api/members") {
         const teamId = searchParams?.get("teamId");
@@ -155,9 +270,89 @@ export async function mockFetch(
     // POST
     if (method === "POST") {
       const body = parseBody();
+      if (pathBase === "api/orders/work-order-number/next") {
+        const workOrderNumber = allocateMockWorkOrderNumber();
+        return jsonResponse({
+          success: true,
+          message: "Work order number generated successfully",
+          data: { workOrderNumber },
+        });
+      }
       if (pathBase === "api/orders" && body) {
-        const order = store.createOrder(body);
-        return jsonResponse(order, 201);
+        const wo = body.workOrderNumber as string | undefined;
+        if (!wo || typeof wo !== "string" || !wo.trim()) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "workOrderNumber is required. Call POST /api/orders/work-order-number/next first.",
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const used = store.getOrders().some((o) => o.orderNo === wo.trim());
+        if (used) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "Work order number already used",
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const party = body.partyId
+          ? store.getParties().find((p) => p.id === body.partyId)
+          : undefined;
+        const designer = body.designerId
+          ? store.getMembers().find((m) => m.id === body.designerId)
+          : undefined;
+        const order = store.createOrder({
+          orderNo: wo.trim(),
+          partyName: party?.name ?? body.partyName ?? "",
+          designerName: designer?.name ?? null,
+          panelType: body.panelType ?? null,
+          poNo: body.poNumber ?? body.poNo ?? null,
+          quantity: body.quantity ?? 0,
+          description: body.descriptionSize ?? body.description ?? null,
+          parts: body.partsCount != null ? String(body.partsCount) : null,
+          customerWoNo: body.panelName ?? body.customerWoNo ?? null,
+          powderCoatingType: body.coatingType === "DOUBLE" ? "double_coat" : "single_coat",
+          colorBody: body.colorDetails?.body ?? null,
+          colorMountingPlate: body.colorDetails?.mountingPlate ?? null,
+          colorBaseStand: body.colorDetails?.baseStand ?? null,
+          remarks: body.remarks ?? null,
+          stage: "design_preparation",
+          status: "in_progress",
+        });
+        const created = { ...order, workOrderNumber: order.orderNo, _id: order.id };
+        if ((body.quantity ?? 0) >= 1) {
+          ensureMockPanels(order.id, Number(body.quantity));
+        }
+        return jsonResponse({ success: true, data: created }, 201);
+      }
+      const dispatchPostMatch = pathBase.match(/^api\/orders\/([^/]+)\/dispatches$/);
+      if (dispatchPostMatch && body) {
+        const orderId = dispatchPostMatch[1];
+        const panels = mockPanelsByOrder.get(orderId) ?? [];
+        const panelIds = (body.panelIds as string[]) ?? [];
+        const dispatch = {
+          _id: `mock-dispatch-${Date.now()}`,
+          createdAt: now(),
+          vehicleNumber: body.vehicleNumber as string | undefined,
+          poReference: body.poReference as string | undefined,
+          remarks: body.remarks as string | undefined,
+          panelIds,
+          panelNumbers: panels.filter((p) => panelIds.includes(p._id)).map((p) => p.panelNo),
+        };
+        for (const p of panels) {
+          if (panelIds.includes(p._id)) {
+            p.panelStatus = "DISPATCHED";
+            p.currentStage = "DISPATCH_VALIDATION";
+          }
+        }
+        const list = mockDispatchesByOrder.get(orderId) ?? [];
+        list.push(dispatch);
+        mockDispatchesByOrder.set(orderId, list);
+        return jsonResponse({ success: true, data: dispatch }, 201);
       }
       if (pathBase === "api/members" && body) {
         const teamName = body.teamId
@@ -307,6 +502,34 @@ export async function mockFetch(
 
     // PATCH
     if (method === "PATCH") {
+      const body = parseBody();
+      const panelStageMatch = pathBase.match(
+        /^api\/orders\/([^/]+)\/panels\/([^/]+)\/stage\/([^/]+)(?:\/edit)?$/,
+      );
+      if (panelStageMatch) {
+        const [, orderId, panelId, stageName] = panelStageMatch;
+        const panels = mockPanelsByOrder.get(orderId) ?? [];
+        const panel = panels.find((p) => p._id === panelId);
+        if (!panel) {
+          return new Response(JSON.stringify({ message: "Panel not found" }), { status: 404 });
+        }
+        const bodyData = (body ?? {}) as Record<string, unknown>;
+        panel.stages = panel.stages.filter((s) => s.name !== stageName);
+        panel.stages.push({ name: stageName, stageStatus: "COMPLETED", data: bodyData });
+        if (stageName === "SHEET_PROCESSING" && bodyData.status === "OK") {
+          panel.currentStage = "FABRICATION";
+        } else if (stageName === "FABRICATION") {
+          panel.currentStage = "DISPATCH_VALIDATION";
+          panel.panelStatus = "READY_TO_DISPATCH";
+        }
+        const order = store.getOrder(orderId);
+        if (order) {
+          return jsonResponse(
+            enrichMockOrderResponse(order as unknown as Record<string, unknown>, true),
+          );
+        }
+        return jsonResponse({ success: true, data: panel });
+      }
       const pathMatch = pathBase.match(/^api\/powder-coatings\/([^/]+)\/status$/);
       if (pathMatch) {
         const idx = mockPowderCoatings.findIndex((p) => p._id === pathMatch[1]);

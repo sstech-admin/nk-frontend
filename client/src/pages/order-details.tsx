@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   StageDetailModal,
   type StageCompletionData,
+  type StageModalMode,
 } from "@/components/stage-detail-modal";
 import { useAuth } from "@/lib/auth-context";
 import type { Member } from "@shared/schema";
@@ -21,12 +22,12 @@ import {
   FileDown,
   FileText,
   Info,
+  Pencil,
 } from "lucide-react";
 import type { Order } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   getOrderByIdPath,
-  getOrderStageUpdatePath,
   getTeamsQueryPath,
   getMembersQueryPath,
   getPowderCoatingsQueryPath,
@@ -34,169 +35,62 @@ import {
   USE_REAL_API,
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { getCompletionDataForStage } from "@/lib/stage-completion-merge";
+import {
+  getCompletionDataForStage,
+  getPanelCompletionDataForStage,
+} from "@/lib/stage-completion-merge";
+import {
+  resolveOrderDetailCacheUpdate,
+  normalizeOrderDetail,
+  type ApiOrderDetail,
+} from "@/lib/order-normalize";
+import {
+  isPanelBasedOrder,
+  type OrderDetailExtended,
+  type PanelRecord,
+} from "@/lib/order-types";
+import { parseApiErrorMessage, userFacingApiError } from "@/lib/api-errors";
+import { savePanelBulkStage, savePanelStage } from "@/lib/panel-stage-save";
+import { isPanelCurrentStage } from "@/lib/panel-workflow";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PanelProductionTab } from "@/components/panel-production-tab";
+import { DispatchTab } from "@/components/dispatch-tab";
 import { exportStageCompletionPdf } from "@/lib/stage-pdf";
 import { stripAttachmentForWrite, type StageAttachment } from "@/lib/stage-uploads";
+import {
+  qcFromStatusOk,
+  isOrderOnSheetProcessingStage,
+  type SheetSaveIntent,
+} from "@/lib/order-stages";
+import { buildDesignStagePatchPayload } from "@/lib/design-stage-form";
+import {
+  timelineKeyToApiStageName,
+  orderStageToTimelineKey,
+  resolveStagePatchPath,
+  shouldConfirmSheetQcRegression,
+  applySheetPayloadAdvanceRules,
+  getTimelineStageUiState,
+  stageKeysToClearAfterSheetRegression,
+  isSheetRegressionResponse,
+  isTimelineStageCurrent,
+  sheetPatchUsesEditEndpoint,
+  normalizeApiStageName,
+  type TimelineStageKey,
+} from "@/lib/order-workflow";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 function formatLabel(s: string | undefined | null): string {
   if (s == null || s === "") return "";
   return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/** API order detail shape (partial). Supports both backend response (_id, panelName, ...) and stored app shape (id, customerWoNo, ...). */
-interface ApiOrderDetail {
-  _id?: string;
-  id?: string;
-  workOrderNumber?: string;
-  orderNo?: string;
-  partyId?: { partyName?: string };
-  partyName?: string;
-  status?: string;
-  currentStage?: string;
-  stage?: string;
-  panelType?: string;
-  quantity?: number;
-  descriptionSize?: string;
-  description?: string;
-  partsCount?: number;
-  parts?: string;
-  designerId?: { name?: string };
-  preparedBy?: { name?: string };
-  designerName?: string;
-  orderDate?: string;
-  createdAt?: string;
-  date?: string;
-  coatingType?: string;
-  powderCoatingType?: string;
-  pricing?: { ratePerKg?: number; includingAccessories?: boolean; extraCharges?: number };
-  rate?: string;
-  rateType?: string;
-  poNumber?: string;
-  poNo?: string;
-  remarks?: string;
-  panelName?: string;
-  customerWoNo?: string;
-  colorDetails?: { body?: string; mountingPlate?: string; baseStand?: string };
-  colorBody?: string;
-  colorMountingPlate?: string;
-  colorBaseStand?: string;
-  accessories?: {
-    pointLock?: boolean;
-    threePointLock?: boolean;
-    puGasketing?: boolean;
-    pattiGasketing?: boolean;
-    other?: string;
-  } | string[];
-  accessoriesOther?: string;
-  stages?: Array<{
-    name?: string;
-    stageStatus?: string;
-    data?: Record<string, unknown>;
-    startedAt?: string | null;
-    completedAt?: string | null;
-    remarks?: string;
-  }>;
-}
-
-/** "snake_case" → "camelCase" (used to hydrate StageCompletionData from API stage.data). */
-function snakeToCamel(s: string): string {
-  return s.replace(/_([a-z0-9])/g, (_m, ch: string) => ch.toUpperCase());
-}
-
-/** Convert API stage name (e.g. "FABRICATION", "DISPATCH_VALIDATION") to the timeline key used on the client. */
-function apiStageNameToKey(name: string | undefined | null): string | null {
-  if (!name) return null;
-  const norm = String(name).toLowerCase().replace(/\s+/g, "_");
-  if (norm === "design_preparation") return "design_preparation";
-  if (norm === "sheet_processing") return "sheet_processing";
-  if (norm === "fabrication" || norm === "powder_coating") return "fabrication";
-  if (norm === "dispatch_validation" || norm === "dispatch" || norm === "assembly_dispatch")
-    return "dispatch_validation";
-  return null;
-}
-
-/** Normalize a single stage.data object (snake_case from server) to the camelCase StageCompletionData shape. */
-function normalizeStageData(raw: Record<string, unknown> | undefined | null): Record<string, unknown> {
-  if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === undefined || v === null) continue;
-    out[snakeToCamel(k)] = v;
-  }
-  // Sheet processing stores a string `status` ("ok"/"not_ok"); modal reads boolean `statusOk`.
-  if (typeof out.status === "string" && out.statusOk === undefined) {
-    out.statusOk = out.status === "ok";
-  }
-  return out;
-}
-
-function normalizeOrderDetail(api: ApiOrderDetail): Order {
-  const status = (api.status ?? "").toLowerCase().replace(/\s+/g, "_");
-  const stage = (api.currentStage ?? api.stage ?? "").toLowerCase().replace(/\s+/g, "_");
-  const rateTypeDisplay =
-    api.rateType ??
-    (api.pricing?.includingAccessories === true ? "Include Accessories" : api.pricing ? "Extra" : undefined);
-  const accessoriesArray: string[] = [];
-  const acc = api.accessories;
-  if (acc && typeof acc === "object" && !Array.isArray(acc)) {
-    if (acc.pointLock) accessoriesArray.push("point_lock");
-    if (acc.threePointLock) accessoriesArray.push("3_point_lock");
-    if (acc.puGasketing) accessoriesArray.push("pu_gasketing");
-    if (acc.pattiGasketing) accessoriesArray.push("patti_gasketing");
-  }
-  const partyName =
-    typeof api.partyId === "object" && api.partyId?.partyName != null
-      ? api.partyId.partyName
-      : api.partyName ?? "";
-
-  // Hydrate saved stage data so Fabrication / Dispatch Validation / Sheet Processing
-  // modals (and PDFs) repopulate after a page reload. The backend stores each stage
-  // under `stages[i].data` using snake_case; we convert it to the camelCase
-  // StageCompletionData shape and key it by the timeline stage key.
-  const stagesMap: Record<string, Record<string, unknown>> = {};
-  const stagesStatus: Record<string, string> = {};
-  if (Array.isArray(api.stages)) {
-    for (const s of api.stages) {
-      const key = apiStageNameToKey(s?.name);
-      if (!key) continue;
-      const normalized = normalizeStageData(s?.data);
-      // Merge (FABRICATION stores a combined fabrication + powder-coating payload; keep both under "fabrication")
-      stagesMap[key] = { ...(stagesMap[key] ?? {}), ...normalized };
-      if (s?.stageStatus) stagesStatus[key] = String(s.stageStatus);
-      if (s?.completedAt && !stagesMap[key].completedDate) {
-        stagesMap[key].completedDate = String(s.completedAt).slice(0, 10);
-      }
-      if (s?.remarks && !stagesMap[key].remarks) stagesMap[key].remarks = s.remarks;
-    }
-  }
-
-  return {
-    id: api._id ?? api.id ?? "",
-    orderNo: api.workOrderNumber ?? api.orderNo ?? api._id ?? api.id ?? "",
-    partyName,
-    status: status || "pending",
-    stage: stage || "design_preparation",
-    quantity: api.quantity ?? 0,
-    date: api.orderDate ?? api.createdAt ?? api.date ?? new Date().toISOString(),
-    panelType: api.panelType,
-    description: api.descriptionSize ?? api.description,
-    parts: api.partsCount != null ? String(api.partsCount) : api.parts,
-    designerName: api.designerId?.name ?? api.preparedBy?.name ?? api.designerName,
-    powderCoatingType: api.coatingType ?? api.powderCoatingType,
-    rate: api.pricing?.ratePerKg != null ? String(api.pricing.ratePerKg) : api.rate,
-    rateType: rateTypeDisplay,
-    poNo: api.poNumber ?? api.poNo,
-    remarks: api.remarks,
-    customerWoNo: api.panelName ?? api.customerWoNo,
-    colorBody: api.colorDetails?.body ?? api.colorBody,
-    colorMountingPlate: api.colorDetails?.mountingPlate ?? api.colorMountingPlate,
-    colorBaseStand: api.colorDetails?.baseStand ?? api.colorBaseStand,
-    accessories: accessoriesArray.length > 0 ? accessoriesArray : Array.isArray(acc) ? acc : undefined,
-    accessoriesOther: (typeof acc === "object" && !Array.isArray(acc) ? acc?.other : undefined) ?? api.accessoriesOther,
-    accessoriesObj: typeof acc === "object" && !Array.isArray(acc) ? acc : undefined,
-    stagesMap,
-    stagesStatus,
-  } as unknown as Order;
 }
 
 function getStatusStyle(status: string) {
@@ -221,26 +115,6 @@ const PRODUCTION_STAGES = [
   { key: "fabrication", label: "Fabrication" },
   { key: "dispatch_validation", label: "Dispatch Validation" },
 ];
-
-/** Map order.stage (from API/store) to timeline stage key. */
-function orderStageToTimelineKey(orderStage: string): string {
-  const normalized = (orderStage ?? "").toLowerCase().replace(/\s+/g, "_");
-  const map: Record<string, string> = {
-    design_preparation: "design_preparation",
-    cutting: "sheet_processing",
-    sheet_processing: "sheet_processing",
-    welding: "fabrication",
-    fabrication: "fabrication",
-    coating: "fabrication",
-    powder_coating: "fabrication",
-    assembly: "dispatch_validation",
-    quality_check: "dispatch_validation",
-    dispatch: "dispatch_validation",
-    dispatch_validation: "dispatch_validation",
-    assembly_dispatch: "dispatch_validation",
-  };
-  return map[normalized] ?? "design_preparation";
-}
 
 function SpecField({
   label,
@@ -296,34 +170,54 @@ function ColorTag({ label, colorName }: { label: string; colorName?: string | nu
 }
 
 function ProductionTimeline({
-  orderStage,
-  status,
+  order,
   onViewStage,
+  onEditStage,
   onUpdateStage,
   onExportPdf,
   canUpdateCurrentStage = true,
+  canShowEdit,
+  stagesFilter,
 }: {
-  orderStage: string;
-  status: string;
+  order: {
+    stage: string;
+    status: string;
+    currentStageApi?: string;
+    stagesStatus?: Record<string, string>;
+  };
   onViewStage: (stageKey: string, stageLabel: string) => void;
+  onEditStage: (stageKey: string, stageLabel: string) => void;
   onUpdateStage: (stageKey: string, stageLabel: string) => void;
   onExportPdf: (stageKey: string, stageLabel: string) => void;
-  /** If false, show "You are not allowed to update" instead of Update button for current stage */
   canUpdateCurrentStage?: boolean;
+  canShowEdit: (stageKey: string) => boolean;
+  stagesFilter?: (stageKey: string) => boolean;
 }) {
-  const currentStageKey = orderStageToTimelineKey(orderStage);
-  const currentIdx = PRODUCTION_STAGES.findIndex((s) => s.key === currentStageKey);
-  /** When order is completed, all stages including the last are done — no loader, show View */
-  const effectiveCurrentIdx = status === "completed" ? PRODUCTION_STAGES.length : currentIdx;
+  const status = order.status;
+  const currentStageKey = orderStageToTimelineKey(order.stage);
+  const visibleStages = stagesFilter
+    ? PRODUCTION_STAGES.filter((s) => stagesFilter(s.key))
+    : PRODUCTION_STAGES;
 
   return (
     <div className="space-y-0">
-      {PRODUCTION_STAGES.map((stage, i) => {
-        const isCompleted = i < effectiveCurrentIdx;
-        const isCurrent = i === effectiveCurrentIdx;
-        const isFuture = i > effectiveCurrentIdx;
-        const isLastStageAndOrderCompleted = status === "completed" && i === PRODUCTION_STAGES.length - 1;
-        const isCancelled = status === "cancelled";
+      {visibleStages.map((stage, i) => {
+        const uiState = getTimelineStageUiState(stage.key as TimelineStageKey, order);
+        const stageApiStatus = order.stagesStatus?.[stage.key]?.toUpperCase();
+        const isCompleted = uiState === "completed";
+        const isCurrent = uiState === "current";
+        const isPending = uiState === "pending";
+        const isLastStageAndOrderCompleted =
+          status === "completed" && i === visibleStages.length - 1;
+        const isCancelled = uiState === "cancelled";
+        const wasCleared =
+          isPending &&
+          stageApiStatus === "PENDING" &&
+          (stage.key === "fabrication" || stage.key === "dispatch_validation") &&
+          currentStageKey === "sheet_processing";
+        const prevCompleted =
+          i > 0 &&
+          getTimelineStageUiState(visibleStages[i - 1].key as TimelineStageKey, order) === "completed";
 
         let StageIcon = Circle;
         let iconColor = "text-muted-foreground/40";
@@ -359,9 +253,9 @@ function ProductionTimeline({
                   className={`h-5 w-5 ${iconColor} ${isCurrent && status === "in_progress" ? "animate-spin" : ""}`}
                 />
               </div>
-              {i < PRODUCTION_STAGES.length - 1 && (
+              {i < visibleStages.length - 1 && (
                 <div
-                  className={`w-0.5 flex-1 min-h-[24px] ${isCompleted ? lineColor : "bg-muted-foreground/15"}`}
+                  className={`w-0.5 flex-1 min-h-[24px] ${prevCompleted || isCompleted ? lineColor : "bg-muted-foreground/15"}`}
                 />
               )}
             </div>
@@ -376,36 +270,44 @@ function ProductionTimeline({
                         : "bg-primary/10 text-primary"
                     }`}
                   >
-                    {status === "on_hold" ? "On Hold" : "In Progress"}
+                    {status === "on_hold" ? "On Hold" : "Current step"}
+                  </span>
+                )}
+                {stageApiStatus && !isCurrent && (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase bg-muted text-muted-foreground">
+                    {formatLabel(stageApiStatus.toLowerCase())}
                   </span>
                 )}
               </div>
               {isCompleted && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Completed
-                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">Completed</p>
               )}
               {isCurrent && !isCancelled && status !== "on_hold" && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Currently processing...
+                <p className="text-xs text-muted-foreground mt-0.5">Currently processing…</p>
+              )}
+              {wasCleared && (
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                  Cleared — complete Sheet Processing again to continue
                 </p>
               )}
-              {isFuture && !isCancelled && (
+              {isPending && !isCancelled && !wasCleared && (
                 <p className="text-xs text-muted-foreground/50 mt-0.5">
-                  Waiting for previous stage...
+                  Waiting for previous stage…
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-2 mt-2">
-                {isCompleted && (
+                {(isCompleted || (isPending && canShowEdit(stage.key))) && (
                   <>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      className="h-7 text-xs w-fit"
-                      onClick={() => onExportPdf(stage.key, stage.label)}
-                    >
-                      <FileDown className="h-3 w-3 mr-1" /> PDF
-                    </Button>
+                    {isCompleted && (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="h-7 text-xs w-fit"
+                        onClick={() => onExportPdf(stage.key, stage.label)}
+                      >
+                        <FileDown className="h-3 w-3 mr-1" /> PDF
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
@@ -414,11 +316,31 @@ function ProductionTimeline({
                     >
                       <Eye className="h-3 w-3 mr-1" /> View
                     </Button>
+                    {canShowEdit(stage.key) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs w-fit"
+                        onClick={() => onEditStage(stage.key, stage.label)}
+                      >
+                        <Pencil className="h-3 w-3 mr-1" /> Edit
+                      </Button>
+                    )}
                   </>
+                )}
+                {isCurrent && !isCancelled && canShowEdit(stage.key) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs w-fit"
+                    onClick={() => onEditStage(stage.key, stage.label)}
+                  >
+                    <Pencil className="h-3 w-3 mr-1" /> Edit
+                  </Button>
                 )}
                 {isCurrent && !isCancelled && canUpdateCurrentStage && (
                   <Button
-                    variant="outline"
+                    variant="default"
                     size="sm"
                     className="h-7 text-xs w-fit"
                     onClick={() => onUpdateStage(stage.key, stage.label)}
@@ -451,11 +373,25 @@ export default function OrderDetailsPage() {
   const [selectedStage, setSelectedStage] = useState<{
     key: string;
     label: string;
-    isCompleted: boolean;
+    mode: StageModalMode;
+    panel?: PanelRecord;
+    panels?: PanelRecord[];
   } | null>(null);
+  const [detailTab, setDetailTab] = useState("order");
+  const [panelSelectionReset, setPanelSelectionReset] = useState(0);
   const [stageCompletionMap, setStageCompletionMap] = useState<
     Record<string, StageCompletionData>
   >({});
+  const [sheetRegressionOpen, setSheetRegressionOpen] = useState(false);
+  const pendingSheetSaveRef = useRef<{
+    stageKey: string;
+    saveMode: "edit" | "complete";
+    panel?: PanelRecord;
+    panels?: PanelRecord[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    data: any;
+    options?: { intent?: SheetSaveIntent };
+  } | null>(null);
 
   const userId = (user as { _id?: string })._id ?? (user as { id?: string }).id;
 
@@ -489,7 +425,7 @@ export default function OrderDetailsPage() {
     enabled: !!orderId,
     queryFn: async () => {
       if (!orderId) throw new Error("No order id");
-      const path = getOrderByIdPath(orderId);
+      const path = getOrderByIdPath(orderId, { includePanels: true });
       const res = await apiRequest("GET", path);
       const json = await res.json();
       if (USE_REAL_API) {
@@ -594,26 +530,233 @@ export default function OrderDetailsPage() {
     { value: "any_other", label: "ANY OTHER" },
   ];
 
-  const openViewStage = useCallback((stageKey: string, stageLabel: string) => {
-    const stageIdx = PRODUCTION_STAGES.findIndex((s) => s.key === stageKey);
-    const orderStageIdx = order
-      ? PRODUCTION_STAGES.findIndex(
-          (s) => s.key === orderStageToTimelineKey(order.stage)
-        )
-      : -1;
-    const isCompleted = order ? (order.status === "completed" || stageIdx < orderStageIdx) : true;
-    setSelectedStage({ key: stageKey, label: stageLabel, isCompleted });
-    setStageModalOpen(true);
+  const isAdmin = user?.role === "ADMIN";
+
+  const canEditStage = useCallback(
+    (stageKey: string): boolean => {
+      if (isAdmin) return true;
+      const apiName = timelineKeyToApiStageName(stageKey);
+      if (allowedStages.length === 0) return true;
+      return allowedStages.some(
+        (s) => String(s).toUpperCase().replace(/-/g, "_") === apiName,
+      );
+    },
+    [isAdmin, allowedStages],
+  );
+
+  const getStageStatusForKey = useCallback((stageKey: string): string | undefined => {
+    if (!order) return undefined;
+    const map = (order as { stagesStatus?: Record<string, string> }).stagesStatus;
+    return map?.[stageKey]?.toUpperCase();
   }, [order]);
 
-  const openUpdateStage = useCallback((stageKey: string, stageLabel: string) => {
-    setSelectedStage({ key: stageKey, label: stageLabel, isCompleted: false });
+  const canShowEditButton = useCallback(
+    (stageKey: string): boolean => {
+      if (!order || !canEditStage(stageKey)) return false;
+      const status = getStageStatusForKey(stageKey);
+      if (USE_REAL_API && status) {
+        return status === "COMPLETED" || status === "IN_PROGRESS";
+      }
+      const idx = PRODUCTION_STAGES.findIndex((s) => s.key === stageKey);
+      const currentIdx = PRODUCTION_STAGES.findIndex(
+        (s) => s.key === orderStageToTimelineKey(order.stage),
+      );
+      const effectiveCurrent =
+        order.status === "completed" ? PRODUCTION_STAGES.length : currentIdx;
+      return idx <= effectiveCurrent;
+    },
+    [order, canEditStage, getStageStatusForKey],
+  );
+
+  const openViewStage = useCallback((stageKey: string, stageLabel: string) => {
+    setSelectedStage({ key: stageKey, label: stageLabel, mode: "view" });
     setStageModalOpen(true);
   }, []);
 
+  const openEditStage = useCallback((stageKey: string, stageLabel: string) => {
+    setSelectedStage({ key: stageKey, label: stageLabel, mode: "edit" });
+    setStageModalOpen(true);
+  }, []);
+
+  const openUpdateStage = useCallback(
+    (stageKey: string, stageLabel: string) => {
+      if (order && !isTimelineStageCurrent(order, stageKey)) {
+        toast({
+          title: "Not the current stage",
+          description: `Use Edit to update ${stageLabel} after the order has moved on.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "complete" });
+      setStageModalOpen(true);
+    },
+    [order, toast],
+  );
+
+  const extendedOrder = order as (Order & OrderDetailExtended) | undefined;
+  const isPanelOrder = extendedOrder ? isPanelBasedOrder(extendedOrder) : false;
+  const orderPanels = extendedOrder?.panels ?? [];
+
+  const openPanelViewStage = useCallback(
+    (panel: PanelRecord, stageKey: string, stageLabel: string) => {
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "view", panel });
+      setStageModalOpen(true);
+    },
+    [],
+  );
+
+  const openPanelEditStage = useCallback(
+    (panel: PanelRecord, stageKey: string, stageLabel: string) => {
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "edit", panel });
+      setStageModalOpen(true);
+    },
+    [],
+  );
+
+  const openPanelUpdateStage = useCallback(
+    (panel: PanelRecord, stageKey: string, stageLabel: string) => {
+      if (!isPanelCurrentStage(panel, stageKey)) {
+        toast({
+          title: "Not the current stage",
+          description: `Use Edit to update ${stageLabel} for panel ${panel.panelNo}.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "complete", panel });
+      setStageModalOpen(true);
+    },
+    [toast],
+  );
+
+  const openPanelBulkEditStage = useCallback(
+    (panels: PanelRecord[], stageKey: string, stageLabel: string) => {
+      if (panels.length === 0) return;
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "edit", panels });
+      setStageModalOpen(true);
+    },
+    [],
+  );
+
+  const openPanelBulkCompleteStage = useCallback(
+    (panels: PanelRecord[], stageKey: string, stageLabel: string) => {
+      if (panels.length === 0) return;
+      const notAtStage = panels.filter((p) => !isPanelCurrentStage(p, stageKey));
+      if (notAtStage.length > 0) {
+        toast({
+          title: "Cannot bulk complete",
+          description: `All selected panels must be at ${stageLabel}. Panel ${notAtStage[0].panelNo} is not.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setSelectedStage({ key: stageKey, label: stageLabel, mode: "complete", panels });
+      setStageModalOpen(true);
+    },
+    [toast],
+  );
+
+  const handlePanelStageSave = useCallback(
+    (panel: PanelRecord, stageKey: string, saveMode: "edit" | "complete") =>
+      async (
+        data: StageCompletionData,
+        options?: { intent?: SheetSaveIntent; confirmedRegression?: boolean },
+      ): Promise<boolean> => {
+        if (!orderId) return true;
+        try {
+          const result = await savePanelStage({
+            orderId,
+            panel,
+            stageKey,
+            saveMode,
+            data,
+            options,
+            onRegressionRequired: () => {
+              pendingSheetSaveRef.current = { stageKey, saveMode, data, options, panel };
+              setSheetRegressionOpen(true);
+            },
+          });
+          if (!result.ok) return false;
+          const mapKey = `${panel.id}:${stageKey}`;
+          setStageCompletionMap((prev) => ({
+            ...prev,
+            [mapKey]: { ...prev[mapKey], ...data, recordedAt: new Date().toISOString() },
+          }));
+          if (!result.keepModalOpen) setStageModalOpen(false);
+          if (result.message) {
+            toast({ title: "Saved", description: result.message });
+          }
+          return !result.keepModalOpen;
+        } catch (err) {
+          toast({
+            title: "Panel stage update failed",
+            description: userFacingApiError(err),
+            variant: "destructive",
+          });
+          return false;
+        }
+      },
+    [orderId, toast],
+  );
+
+  const handlePanelBulkStageSave = useCallback(
+    (panels: PanelRecord[], stageKey: string, saveMode: "edit" | "complete") =>
+      async (
+        data: StageCompletionData,
+        options?: { intent?: SheetSaveIntent; confirmedRegression?: boolean },
+      ): Promise<boolean> => {
+        if (!orderId || panels.length === 0) return true;
+        try {
+          const result = await savePanelBulkStage({
+            orderId,
+            panels,
+            stageKey,
+            saveMode,
+            data,
+            options,
+            onRegressionRequired: () => {
+              pendingSheetSaveRef.current = { stageKey, saveMode, data, options, panels };
+              setSheetRegressionOpen(true);
+            },
+          });
+          if (!result.ok) return false;
+          const recordedAt = new Date().toISOString();
+          setStageCompletionMap((prev) => {
+            const next = { ...prev };
+            for (const panel of panels) {
+              const mapKey = `${panel.id}:${stageKey}`;
+              next[mapKey] = { ...next[mapKey], ...data, recordedAt };
+            }
+            return next;
+          });
+          setPanelSelectionReset((n) => n + 1);
+          if (!result.keepModalOpen) {
+            setStageModalOpen(false);
+          }
+          toast({
+            title: "Saved",
+            description:
+              result.message ??
+              `${result.updated ?? panels.length} panel(s) updated successfully`,
+          });
+          return !result.keepModalOpen;
+        } catch (err) {
+          toast({
+            title: "Bulk panel update failed",
+            description: userFacingApiError(err),
+            variant: "destructive",
+          });
+          return false;
+        }
+      },
+    [orderId, toast],
+  );
+
   const handleStageSave = useCallback(
-    (stageKey: string) =>
-      async (data: {
+    (stageKey: string, saveMode: "edit" | "complete") =>
+      async (
+        data: {
         proofFileName?: string;
         proofPreviewUrl?: string;
         remarks?: string;
@@ -625,6 +768,18 @@ export default function OrderDetailsPage() {
         teamMemberId?: string;
         qualityCheckPassed?: boolean;
         woNo?: string;
+        partyName?: string;
+        panelType?: string;
+        quantity?: string | number;
+        description?: string;
+        parts?: string | number;
+        customerWoNo?: string;
+        powderCoatingType?: string;
+        colorMountingPlate?: string;
+        colorBaseStand?: string;
+        rateType?: string;
+        rate?: string;
+        orderRemarks?: string;
         customerName?: string;
         dcNo?: string;
         poNo?: string;
@@ -665,9 +820,39 @@ export default function OrderDetailsPage() {
         baseQty?: string | number;
         standQty?: string | number;
         attachments?: StageAttachment[];
-      }) => {
-        if (!order?.id || !orderId) return;
-        const stageNameForApi = stageKey.toUpperCase().replace(/-/g, "_");
+      },
+        options?: { intent?: SheetSaveIntent; confirmedRegression?: boolean },
+      ): Promise<boolean> => {
+        if (!order?.id || !orderId) return true;
+
+        if (
+          shouldConfirmSheetQcRegression(stageKey, order, data.statusOk ?? true) &&
+          !options?.confirmedRegression
+        ) {
+          pendingSheetSaveRef.current = { stageKey, saveMode, data, options };
+          setSheetRegressionOpen(true);
+          return false;
+        }
+
+        const isEditSave = saveMode === "edit";
+        const sheetIntent: SheetSaveIntent | undefined =
+          stageKey === "sheet_processing" && !isEditSave
+            ? options?.intent ?? "complete"
+            : undefined;
+        const workflowOrder = order as Order & {
+          currentStageApi?: string;
+          stagesStatus?: Record<string, string>;
+        };
+        const previousCurrentApi = workflowOrder.currentStageApi ?? normalizeApiStageName(order.stage);
+        const stageNameForApi =
+          stageKey === "fabrication" || stageKey === "powder_coating"
+            ? "FABRICATION"
+            : timelineKeyToApiStageName(stageKey);
+        const usesEditEndpoint =
+          saveMode === "edit" ||
+          (stageKey === "sheet_processing"
+            ? sheetPatchUsesEditEndpoint(workflowOrder, saveMode)
+            : !isTimelineStageCurrent(workflowOrder, stageKey));
         const attachmentsPayload = Array.isArray(data.attachments) ? data.attachments : undefined;
         // PATCH-safe copy: drop the transient `viewUrl` (presigned GET, regenerated
         // on every order GET). The original `attachmentsPayload` is kept for the
@@ -675,13 +860,20 @@ export default function OrderDetailsPage() {
         const attachmentsForPatch = attachmentsPayload?.map(stripAttachmentForWrite);
         let payload: Record<string, unknown>;
         if (stageKey === "sheet_processing") {
+          const qcStatus = qcFromStatusOk(data.statusOk ?? false);
           payload = {
             sheet_qty: typeof data.sheetQty === "number" ? data.sheetQty : Number(data.sheetQty) || 0,
-            status: data.statusOk ? "ok" : "not_ok",
+            status: qcStatus,
             remarks: data.remarks?.trim() || "",
             notes: data.remarks?.trim() || "",
             ...(attachmentsForPatch ? { attachments: attachmentsForPatch } : {}),
           };
+          applySheetPayloadAdvanceRules(payload, {
+            saveMode,
+            usesEditEndpoint,
+            sheetIntent,
+            qcStatus,
+          });
         } else if (stageKey === "fabrication") {
           payload = {
             completion_date: data.completionDate?.trim() || undefined,
@@ -787,6 +979,33 @@ export default function OrderDetailsPage() {
             notes: data.remarks?.trim() || "",
             ...(attachmentsForPatch ? { attachments: attachmentsForPatch } : {}),
           };
+        } else if (stageKey === "design_preparation") {
+          payload = buildDesignStagePatchPayload(
+            {
+              partyName: data.partyName,
+              designerName: data.designerName,
+              panelType: data.panelType,
+              poNo: data.poNo,
+              quantity: data.quantity,
+              description: data.description,
+              parts: data.parts,
+              customerWoNo: data.customerWoNo,
+              powderCoatingType: data.powderCoatingType,
+              colorBody: data.colorBody,
+              colorMountingPlate: data.colorMountingPlate,
+              colorBaseStand: data.colorBaseStand,
+              rateType: data.rateType,
+              rate: data.rate,
+              orderRemarks: data.orderRemarks,
+              remarks: data.remarks,
+              pointLock: data.pointLock,
+              threePointLock: data.threePointLock,
+              puGasketing: data.puGasketing,
+              pattiGasketing: data.pattiGasketing,
+              accessoriesOther: data.accessoriesOther,
+            },
+            attachmentsForPatch,
+          );
         } else {
           payload = {
             remarks: data.remarks?.trim() || "",
@@ -857,38 +1076,156 @@ export default function OrderDetailsPage() {
               notes: data.remarks?.trim() || "",
             }
           : {};
+        let keepModalOpen = false;
         if (USE_REAL_API) {
+          const effectiveSaveMode = usesEditEndpoint ? "edit" : saveMode;
+          const patchPath = (_name: string) => {
+            const key = isCombinedFabPc ? "fabrication" : stageKey;
+            return resolveStagePatchPath(order.id, key, workflowOrder, effectiveSaveMode);
+          };
           try {
+            let json: unknown;
             if (isCombinedFabPc) {
+              if (!isTimelineStageCurrent(workflowOrder, "fabrication") && saveMode === "complete") {
+                toast({
+                  title: "Not the current stage",
+                  description: "Complete Sheet Processing before updating Fabrication.",
+                  variant: "destructive",
+                });
+                return false;
+              }
               const mergedFabricationPayload = {
                 ...fabricationPayload,
                 ...powderCoatingPayload,
                 ...(attachmentsForPatch ? { attachments: attachmentsForPatch } : {}),
               };
-              await apiRequest("PATCH", getOrderStageUpdatePath(order.id, "FABRICATION"), mergedFabricationPayload);
+              const res = await apiRequest("PATCH", patchPath("FABRICATION"), mergedFabricationPayload);
+              json = await res.json();
             } else {
-              await apiRequest("PATCH", getOrderStageUpdatePath(order.id, stageNameForApi), payload);
+              if (
+                saveMode === "complete" &&
+                !usesEditEndpoint &&
+                !isTimelineStageCurrent(workflowOrder, stageKey)
+              ) {
+                toast({
+                  title: "Not the current stage",
+                  description: `Use Edit to change ${stageLabelForError} after the order has moved on.`,
+                  variant: "destructive",
+                });
+                return false;
+              }
+              const res = await apiRequest("PATCH", patchPath(stageNameForApi), payload);
+              json = await res.json();
+            }
+            const { order: updated, shouldSetCache } = resolveOrderDetailCacheUpdate(json);
+            if (shouldSetCache && updated) {
+              queryClient.setQueryData(["order-detail", orderId], updated);
+            } else {
+              await queryClient.invalidateQueries({ queryKey: ["order-detail", orderId] });
+            }
+            queryClient.invalidateQueries({ queryKey: ["orders-list"] });
+            const successMessage = (json as { message?: string })?.message;
+            const updatedWorkflow = updated as Order & { currentStageApi?: string };
+            const apiCurrentStage =
+              (json as { data?: ApiOrderDetail })?.data?.currentStage ??
+              updatedWorkflow?.currentStageApi ??
+              updated?.stage;
+            const sheetSavedNotAdvanced =
+              stageKey === "sheet_processing" &&
+              !usesEditEndpoint &&
+              !isEditSave &&
+              isOrderOnSheetProcessingStage(apiCurrentStage);
+
+            const didRegress = isSheetRegressionResponse(
+              stageKey,
+              data.statusOk ?? true,
+              successMessage,
+              updatedWorkflow ?? null,
+              previousCurrentApi,
+            );
+            if (didRegress) {
+              setStageCompletionMap((prev) => {
+                const next = { ...prev };
+                for (const k of stageKeysToClearAfterSheetRegression()) {
+                  delete next[k];
+                }
+                return next;
+              });
+            }
+
+            if (sheetSavedNotAdvanced) {
+              keepModalOpen = true;
+              toast({
+                title: "Saved",
+                description:
+                  successMessage ??
+                  "Sheet processing saved. Set status to OK and complete to continue.",
+              });
+            } else {
+              const toastTitle = didRegress
+                ? "Order returned to Sheet Processing"
+                : isEditSave || usesEditEndpoint
+                  ? "Stage updated"
+                  : "Stage completed";
+              toast({
+                title: toastTitle,
+                description: successMessage ?? "Changes saved successfully.",
+              });
+              setStageModalOpen(false);
             }
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const isNotAllowed = message.includes("403") || /forbidden|not allowed/i.test(message);
-            toast({
-              title: isNotAllowed ? "Not allowed" : "Stage update failed",
-              description: isNotAllowed
-                ? `You are not allowed to update the ${stageLabelForError}.`
-                : message || "Something went wrong",
-              variant: "destructive",
-            });
-            throw err;
+            const { status, message } = parseApiErrorMessage(err);
+            if (status === 403 || /not allowed/i.test(message)) {
+              toast({
+                title: "Not allowed",
+                description: `You are not allowed to update ${stageLabelForError}.`,
+                variant: "destructive",
+              });
+            } else if (status === 400 && /not yet available/i.test(message)) {
+              toast({
+                title: "Stage not available",
+                description: message,
+                variant: "destructive",
+              });
+            } else if (status === 400 && /already completed/i.test(message) && !isEditSave) {
+              toast({
+                title: "Use Edit",
+                description: "This stage is already completed. Use Edit to change details.",
+                variant: "destructive",
+              });
+            } else if (status === 400 && /previous stage/i.test(message)) {
+              toast({
+                title: "Complete previous stage first",
+                description: message,
+                variant: "destructive",
+              });
+            } else {
+              toast({
+                title: isEditSave ? "Save failed" : "Stage update failed",
+                description: userFacingApiError(err),
+                variant: "destructive",
+              });
+            }
+            return false;
           }
-          queryClient.invalidateQueries({ queryKey: ["order-detail", orderId] });
-          queryClient.invalidateQueries({ queryKey: ["orders-list"] });
-          queryClient.invalidateQueries({ queryKey: [`/api/orders/${orderId}`] });
         }
+        const sheetStaysInProgress =
+          stageKey === "sheet_processing" &&
+          !usesEditEndpoint &&
+          !isEditSave &&
+          (sheetIntent === "save_progress" || !data.statusOk);
+
         setStageCompletionMap((prev) => {
           const completionEntry = {
             ...(prev[stageKey] ?? {}),
-          completedDate: data.completionDate ?? new Date().toISOString().slice(0, 10),
+          completedDate:
+            data.completionDate ??
+            (isEditSave || sheetStaysInProgress
+              ? prev[stageKey]?.completedDate
+              : undefined) ??
+            (!isEditSave && !sheetStaysInProgress
+              ? new Date().toISOString().slice(0, 10)
+              : prev[stageKey]?.completedDate),
           executedBy: user?.name ?? user?.email ?? user?.username ?? "System",
           proofFileName: data.proofFileName,
           proofPreviewUrl: data.proofPreviewUrl,
@@ -900,6 +1237,18 @@ export default function OrderDetailsPage() {
           teamMemberId: data.teamMemberId && data.teamMemberId !== "_none" ? data.teamMemberId : undefined,
           qualityCheckPassed: data.qualityCheckPassed,
           woNo: data.woNo,
+          partyName: data.partyName,
+          panelType: data.panelType,
+          quantity: data.quantity,
+          description: data.description,
+          parts: data.parts,
+          customerWoNo: data.customerWoNo,
+          powderCoatingType: data.powderCoatingType,
+          colorMountingPlate: data.colorMountingPlate,
+          colorBaseStand: data.colorBaseStand,
+          rateType: data.rateType,
+          rate: data.rate,
+          orderRemarks: data.orderRemarks,
           customerName: data.customerName,
           dcNo: data.dcNo,
           poNo: data.poNo,
@@ -948,12 +1297,29 @@ export default function OrderDetailsPage() {
           }
           return next;
         });
+        if (!USE_REAL_API) {
+          if (sheetStaysInProgress) {
+            keepModalOpen = true;
+          } else {
+            setStageModalOpen(false);
+          }
+        }
+        return !keepModalOpen;
       },
-    [order?.id, orderId, user?.name, user?.email, user?.username]
+    [order, orderId, user?.name, user?.email, user?.username, toast]
   );
 
   const stageModalCompletionData = useMemo((): StageCompletionData | null => {
     if (!selectedStage || !order) return null;
+    const panelForData = selectedStage.panel ?? selectedStage.panels?.[0];
+    if (panelForData) {
+      return getPanelCompletionDataForStage(
+        selectedStage.key,
+        order,
+        panelForData,
+        stageCompletionMap,
+      );
+    }
     return getCompletionDataForStage(selectedStage.key, order, stageCompletionMap);
   }, [selectedStage, stageCompletionMap, order]);
 
@@ -1065,7 +1431,7 @@ export default function OrderDetailsPage() {
 
   return (
     <div
-      className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6"
+      className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6 min-w-0 overflow-x-hidden"
       data-testid="order-details-page"
     >
       {/* Header: back, order id, status, party name, current stage pill */}
@@ -1136,7 +1502,14 @@ export default function OrderDetailsPage() {
                   label="Product"
                   value={order.panelType ?? undefined}
                 />
-                <SpecField label="Quantity" value={order.quantity} />
+                <SpecField
+                  label="Quantity"
+                  value={
+                    isPanelOrder && extendedOrder?.dispatchedQuantity != null
+                      ? `${extendedOrder.dispatchedQuantity} / ${order.quantity} dispatched`
+                      : order.quantity
+                  }
+                />
                 <SpecField
                   label="Description (Size)"
                   value={order.description ?? undefined}
@@ -1188,27 +1561,94 @@ export default function OrderDetailsPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardContent className="p-4 sm:p-6">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-5">
-                Production Timeline
-              </h3>
-              <ProductionTimeline
-                orderStage={order.stage}
-                status={order.status}
-                onViewStage={openViewStage}
-                onUpdateStage={openUpdateStage}
-                onExportPdf={handleExportPdf}
-                canUpdateCurrentStage={(() => {
-                  const currentKey = orderStageToTimelineKey(order.stage);
-                  const normalized = (s: string) => String(s).toUpperCase().replace(/\s+/g, "_").replace(/-/g, "_");
-                  const currentNormalized = normalized(currentKey);
-                  if (allowedStages.length === 0) return true;
-                  return allowedStages.some((s) => normalized(s) === currentNormalized);
-                })()}
-              />
-            </CardContent>
-          </Card>
+          <Tabs value={detailTab} onValueChange={setDetailTab} className="w-full">
+            <TabsList className="mb-4 flex-wrap h-auto">
+              <TabsTrigger value="order">Order &amp; Design</TabsTrigger>
+              {isPanelOrder && (
+                <>
+                  <TabsTrigger value="panels">Panels</TabsTrigger>
+                  <TabsTrigger value="dispatches">Dispatches</TabsTrigger>
+                </>
+              )}
+            </TabsList>
+            <TabsContent value="order">
+              <Card>
+                <CardContent className="p-4 sm:p-6">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-5">
+                    {isPanelOrder ? "Design (order level)" : "Production Timeline"}
+                  </h3>
+                  {isPanelOrder ? (
+                    <ProductionTimeline
+                      order={{
+                        stage: order.stage,
+                        status: order.status,
+                        currentStageApi: extendedOrder?.currentStageApi,
+                        stagesStatus: extendedOrder?.stagesStatus,
+                      }}
+                      onViewStage={openViewStage}
+                      onEditStage={openEditStage}
+                      onUpdateStage={openUpdateStage}
+                      onExportPdf={handleExportPdf}
+                      canShowEdit={canShowEditButton}
+                      canUpdateCurrentStage={canEditStage("design_preparation")}
+                      stagesFilter={(key) => key === "design_preparation"}
+                    />
+                  ) : (
+                    <ProductionTimeline
+                      order={{
+                        stage: order.stage,
+                        status: order.status,
+                        currentStageApi: extendedOrder?.currentStageApi,
+                        stagesStatus: extendedOrder?.stagesStatus,
+                      }}
+                      onViewStage={openViewStage}
+                      onEditStage={openEditStage}
+                      onUpdateStage={openUpdateStage}
+                      onExportPdf={handleExportPdf}
+                      canShowEdit={canShowEditButton}
+                      canUpdateCurrentStage={(() => {
+                        const currentKey = orderStageToTimelineKey(order.stage);
+                        return canEditStage(currentKey);
+                      })()}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+            {isPanelOrder && (
+              <>
+                <TabsContent value="panels">
+                  <Card>
+                    <CardContent className="p-4 sm:p-6">
+                      <PanelProductionTab
+                        order={extendedOrder!}
+                        panels={orderPanels}
+                        panelSummary={extendedOrder?.panelSummary}
+                        selectionResetKey={panelSelectionReset}
+                        canEditStage={canEditStage}
+                        onViewStage={openPanelViewStage}
+                        onEditStage={openPanelEditStage}
+                        onUpdateStage={openPanelUpdateStage}
+                        onBulkEditStage={openPanelBulkEditStage}
+                        onBulkCompleteStage={openPanelBulkCompleteStage}
+                      />
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                <TabsContent value="dispatches">
+                  <Card>
+                    <CardContent className="p-4 sm:p-6">
+                      <DispatchTab
+                        orderId={orderId!}
+                        panels={orderPanels}
+                        poReferences={extendedOrder?.poReferences}
+                      />
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+              </>
+            )}
+          </Tabs>
         </div>
 
         {/* Right column: Summary (color tags + remarks) + Files & Attachments */}
@@ -1261,16 +1701,81 @@ export default function OrderDetailsPage() {
         </div>
       </div>
 
+      <AlertDialog open={sheetRegressionOpen} onOpenChange={setSheetRegressionOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Return order to Sheet Processing?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingSheetSaveRef.current?.panels?.length
+                ? `This will return ${pendingSheetSaveRef.current.panels.length} panel(s) to Sheet Processing and clear later stage data. Continue?`
+                : pendingSheetSaveRef.current?.panel
+                  ? "This will return the panel to Sheet Processing and clear later stage data. Continue?"
+                  : "This will send the order back to Sheet Processing and clear Fabrication and Dispatch data. Continue?"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = pendingSheetSaveRef.current;
+                setSheetRegressionOpen(false);
+                if (!pending || !order) return;
+                if (pending.panels?.length) {
+                  void handlePanelBulkStageSave(
+                    pending.panels,
+                    pending.stageKey,
+                    pending.saveMode,
+                  )(pending.data, { ...pending.options, confirmedRegression: true });
+                } else if (pending.panel) {
+                  void handlePanelStageSave(
+                    pending.panel,
+                    pending.stageKey,
+                    pending.saveMode,
+                  )(pending.data, { ...pending.options, confirmedRegression: true });
+                } else {
+                  void handleStageSave(pending.stageKey, pending.saveMode)(pending.data, {
+                    ...pending.options,
+                    confirmedRegression: true,
+                  });
+                }
+                pendingSheetSaveRef.current = null;
+              }}
+            >
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {order && selectedStage && (
         <StageDetailModal
           open={stageModalOpen}
           onOpenChange={setStageModalOpen}
           order={order}
           stageKey={selectedStage.key}
-          stageLabel={selectedStage.label}
-          isCompleted={selectedStage.isCompleted}
+          stageLabel={
+            selectedStage.panels?.length
+              ? `${selectedStage.label} — ${selectedStage.panels.length} panels`
+              : selectedStage.panel
+                ? `${selectedStage.label} — Panel ${selectedStage.panel.panelNo}`
+                : selectedStage.label
+          }
+          mode={selectedStage.mode}
+          isOrderCurrentStage={
+            selectedStage.panels?.length
+              ? selectedStage.panels.every((p) =>
+                  isPanelCurrentStage(p, selectedStage.key),
+                )
+              : selectedStage.panel
+                ? isPanelCurrentStage(selectedStage.panel, selectedStage.key)
+                : isTimelineStageCurrent(order, selectedStage.key)
+          }
           completionData={stageModalCompletionData}
-          isAuthorized={isAuthenticated}
+          isAuthorized={
+            selectedStage.mode === "view"
+              ? true
+              : canEditStage(selectedStage.key)
+          }
           teamMemberOptions={selectedStage.key === "fabrication" || selectedStage.key === "powder_coating" ? teamMemberOptions : undefined}
           coatingTypeOptions={selectedStage.key === "powder_coating" || selectedStage.key === "dispatch_validation" ? coatingTypeOptions : undefined}
           pcLocationOptions={
@@ -1282,9 +1787,24 @@ export default function OrderDetailsPage() {
             selectedStage.key === "powder_coating" ? powderCoatingTeamOptions : undefined
           }
           onSave={
-            selectedStage.isCompleted
+            selectedStage.mode === "view"
               ? undefined
-              : handleStageSave(selectedStage.key)
+              : selectedStage.panels?.length
+                ? handlePanelBulkStageSave(
+                    selectedStage.panels,
+                    selectedStage.key,
+                    selectedStage.mode === "edit" ? "edit" : "complete",
+                  )
+                : selectedStage.panel
+                  ? handlePanelStageSave(
+                      selectedStage.panel,
+                      selectedStage.key,
+                      selectedStage.mode === "edit" ? "edit" : "complete",
+                    )
+                  : handleStageSave(
+                      selectedStage.key,
+                      selectedStage.mode === "edit" ? "edit" : "complete",
+                    )
           }
         />
       )}
