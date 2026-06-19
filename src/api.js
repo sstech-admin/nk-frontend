@@ -1,4 +1,7 @@
-const BASE = "/api";
+// Local dev: leave VITE_API_URL unset — Vite proxies /api to the backend (see vite.config.js).
+// Production (Amplify): set VITE_API_URL to your App Runner backend URL, e.g. https://xxxx.awsapprunner.com
+const API_ROOT = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+const BASE = API_ROOT + "/api";
 
 let TOKEN = localStorage.getItem("nk_token") || null;
 let onUnauthorized = () => {};
