@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api, setToken, getToken, setOnUnauthorized } from "./api.js";
-import { PC_LOCATIONS, BOM_ITEMS } from "./constants.js";
+// Reference lists (BOM items, P.C. locations) come from the API (/api/meta), not static files.
 
 /* ------------------------------------------------------------------ helpers */
 const ALL_TABS = [
@@ -42,10 +42,12 @@ function Section({ id, label, color, count, openMap, setOpen, children }) {
 }
 
 /* ------------------------------------------------------------------ challan */
-function Challan({ o, type, patch }) {
+function Challan({ o, type, patch, meta }) {
   const isPC = type === "pc";
   const edit = isPC ? o.stage === 4 : o.stage === 5;
   const s = isPC ? o.s4 : o.s5;
+  const bomItems = (meta && meta.bomItems) || [];
+  const pcLocations = (meta && meta.pcLocations) || [];
   const setBomItem = (i, v) => patch({ [`s4.bom.${i}.item`]: v });
   const setBomQty = (i, v) => patch({ [`s4.bom.${i}.qty`]: v });
   const setChk = (i, v) => patch({ [`s5.checks.${i}`]: v });
@@ -55,7 +57,7 @@ function Challan({ o, type, patch }) {
          : <span>{val || "-"}</span>;
 
   const bomRows = o.s4.bom.map((b, i) => {
-    const fixed = i < BOM_ITEMS.length;
+    const fixed = i < bomItems.length;
     const isBody = b.item === "BODY SIZE";   // row 1 — value auto-carried from the order size
     return (
       <tr key={i}>
@@ -97,7 +99,7 @@ function Challan({ o, type, patch }) {
         <tr className="head"><td colSpan={2}>ACCESSORIES</td></tr>
         <tr><td colSpan={2} className="challan-blue">{ck(o.acc.point, "POINT LOCK")} &nbsp; {ck(o.acc.p3, "3 POINT LOCK")} &nbsp; {ck(o.acc.pu, "PU GASKETING")} &nbsp; {ck(o.acc.patti, "PATTI GASKETING")} &nbsp; ANY OTHER: {o.acc.other || "-"}</td></tr>
         <tr className="head"><td colSpan={2}>POWDER COATING LOCATION</td></tr>
-        <tr><td colSpan={2} className="challan-yellow">{PC_LOCATIONS.map(l => {
+        <tr><td colSpan={2} className="challan-yellow">{pcLocations.map(l => {
           const on = s.location === l;
           return <span key={l} style={{ marginRight: 14, cursor: edit ? "pointer" : "default", fontWeight: on ? "bold" : "normal" }}
             onClick={() => edit && patch({ "s4.location": l })}>
@@ -356,7 +358,7 @@ function TableStage({ title, handler, stageNo, orders, meta, patch, advance, ope
 }
 
 /* card-based stages 4 & 5 */
-function CardStage({ which, orders, patch, advance, dispatch, openChallan, openMap, setOpen }) {
+function CardStage({ which, orders, patch, advance, dispatch, openChallan, openMap, setOpen, meta }) {
   const stageNo = which === 4 ? 4 : 5;
   const inc = orders.filter(o => o.stage === stageNo);
   const done = orders.filter(o => which === 4 ? o.stage > 4 : o.stage === 6);
@@ -383,7 +385,7 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
         <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PART (BHAG)</td><td className="challan-blue">{o.parts}</td></tr>
         <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600, padding: 8 }}>READY TO DISPATCH</td></tr>
       </tbody></table>
-      <Challan o={o} type="pc" patch={(set) => patch(o.wo, set)} />
+      <Challan o={o} type="pc" patch={(set) => patch(o.wo, set)} meta={meta} />
     </div>
   ) : (
     <div className="card" key={o.wo}>
@@ -407,7 +409,7 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
         </td></tr>
         <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600, padding: 8 }}>ASSEMBLY (READY TO DISPATCH)</td></tr>
       </tbody></table>
-      <Challan o={o} type="dispatch" patch={(set) => patch(o.wo, set)} />
+      <Challan o={o} type="dispatch" patch={(set) => patch(o.wo, set)} meta={meta} />
     </div>
   );
 
@@ -591,7 +593,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [view, setView] = useState("dashboard");
-  const [meta, setMeta] = useState({ designers: [], contractors: [], nextWO: 101 });
+  const [meta, setMeta] = useState({ designers: [], contractors: [], bomItems: [], pcLocations: [], nextWO: 101 });
   const [orders, setOrders] = useState([]);
   const [openMap, setOpen] = useState({});
   const [err, setErr] = useState("");
@@ -621,7 +623,7 @@ export default function App() {
     try {
       const calls = [api.orders()];
       // meta is needed for admin + stage 1 (designer) + stage 3 (contractor)
-      calls.push(api.meta().catch(() => ({ designers: [], contractors: [], nextWO: 101 })));
+      calls.push(api.meta().catch(() => ({ designers: [], contractors: [], bomItems: [], pcLocations: [], nextWO: 101 })));
       const [o, m] = await Promise.all(calls);
       setOrders(o); setMeta(m); setErr(""); setReady(true);
     } catch (e) { setErr(e.message); setReady(true); }
@@ -688,8 +690,8 @@ export default function App() {
           {view === "stage1" && <StageOne meta={meta} nextWO={meta.nextWO} onCreated={refresh} />}
           {view === "stage2" && <TableStage title="Stage 02 — Cutting & Bending" handler="Handled by Mukesh Sodha / Deepak Vacheta" stageNo={2} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} />}
           {view === "stage3" && <TableStage title="Stage 03 — Fabrication" handler="Handled by Irfan Belim" stageNo={3} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} />}
-          {view === "stage4" && <CardStage which={4} orders={orders} patch={patch} advance={advance} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} />}
-          {view === "stage5" && <CardStage which={5} orders={orders} patch={patch} advance={advance} dispatch={dispatch} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} />}
+          {view === "stage4" && <CardStage which={4} orders={orders} patch={patch} advance={advance} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} meta={meta} />}
+          {view === "stage5" && <CardStage which={5} orders={orders} patch={patch} advance={advance} dispatch={dispatch} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} meta={meta} />}
         </>}
       </main>
 
@@ -703,7 +705,7 @@ export default function App() {
                 <button className="ghost" onClick={() => setChallan(null)}>Close</button>
               </div>
             </div>
-            <Challan o={challanOrder} type={challan.type} patch={(set) => patch(challanOrder.wo, set)} />
+            <Challan o={challanOrder} type={challan.type} patch={(set) => patch(challanOrder.wo, set)} meta={meta} />
           </div>
         </div>
       )}
