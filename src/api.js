@@ -52,16 +52,24 @@ export const api = {
   health: () => call("GET", "/health"),
   meta: () => call("GET", "/meta"),
   orders: () => call("GET", "/orders"),
+  alerts: () => call("GET", "/alerts"),
   createOrder: (o) => call("POST", "/orders", o),
   patchOrder: (wo, set) => call("PATCH", `/orders/${wo}`, set),
   advance: (wo, to) => call("POST", `/orders/${wo}/advance`, { to }),
+  split: (wo, quantities) => call("POST", `/orders/${wo}/split`, { quantities }),
   dispatch: (wo) => call("POST", `/orders/${wo}/dispatch`),
   delOrder: (wo) => call("DELETE", `/orders/${wo}`),
   addDesigner: (name) => call("POST", "/designers", { name }),
   delDesigner: (name) => call("DELETE", "/designers/" + encodeURIComponent(name)),
   addContractor: (name) => call("POST", "/contractors", { name }),
   delContractor: (name) => call("DELETE", "/contractors/" + encodeURIComponent(name)),
-  reports: (month) => call("GET", "/reports" + (month ? `?month=${month}` : "")),
+  reports: (range = {}) => {
+    const q = [];
+    if (range.from) q.push(`from=${range.from}`);
+    if (range.to) q.push(`to=${range.to}`);
+    if (range.month) q.push(`month=${range.month}`);
+    return call("GET", "/reports" + (q.length ? `?${q.join("&")}` : ""));
+  },
   seed: () => call("POST", "/seed"),
   wipe: () => call("POST", "/wipe")
 };

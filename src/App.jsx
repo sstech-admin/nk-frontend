@@ -24,6 +24,24 @@ const accLine = (o) => {
   if (o.acc.other) a.push(o.acc.other);
   return a.join(", ") || "-";
 };
+// Split / box display helpers
+const woNum = (o) => o.group || o.wo;                       // original WO number for display
+const boxTag = (o) => (o.boxes > 1 ? ` · Box ${o.box}/${o.boxes}` : "");
+const woTitle = (o) => `WO. NO. – ${woNum(o)}${boxTag(o)}`;
+
+/* ---- stage timing / 3-day SLA (Stage 02 & 05) ---- */
+const SLA_DAYS = 3;
+const SLA_STAGES = [2, 5];
+const stageEnteredAt = (o) => {
+  const h = o.stageHistory;
+  if (h && h.length) return new Date(h[h.length - 1].at);
+  return o.updatedAt ? new Date(o.updatedAt) : (o.createdAt ? new Date(o.createdAt) : null);
+};
+const daysInCurrentStage = (o) => {
+  const e = stageEnteredAt(o);
+  return e ? Math.floor((Date.now() - e) / 86400000) : null;
+};
+const isOverdue = (o) => SLA_STAGES.includes(o.stage) && (daysInCurrentStage(o) ?? 0) > SLA_DAYS;
 
 /* collapsible section (collapsed by default) */
 function Section({ id, label, color, count, openMap, setOpen, children }) {
@@ -38,6 +56,73 @@ function Section({ id, label, color, count, openMap, setOpen, children }) {
       </div>
       {open && <div>{children}</div>}
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ split modal */
+function splitEven(total, k) {
+  const base = Math.floor(total / k);
+  const arr = Array(k).fill(base);
+  let rem = total - base * k;
+  for (let i = 0; i < rem; i++) arr[i]++;
+  return arr;
+}
+function SplitModal({ order, onClose, onDone }) {
+  const total = order.qty;
+  const [n, setN] = useState(2);
+  // qtys are kept as strings so the user can freely type, clear, and edit each
+  // box. We only parse to integers when validating / submitting.
+  const [qtys, setQtys] = useState(() => splitEven(total, 2).map(String));
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const setCount = (k) => {
+    k = Math.max(2, Math.min(total, parseInt(k, 10) || 2));
+    setN(k); setQtys(splitEven(total, k).map(String));
+  };
+  const setQ = (i, v) => {
+    // allow only digits (and empty) while typing — no coercion that fights the cursor
+    if (!/^\d*$/.test(v)) return;
+    setQtys(qs => qs.map((q, idx) => idx === i ? v : q));
+  };
+  const nums = qtys.map(q => parseInt(q, 10));
+  const sum = nums.reduce((s, q) => s + (Number.isFinite(q) ? q : 0), 0);
+  const valid = sum === total && nums.every(q => Number.isFinite(q) && q >= 1);
+  const confirm = async () => {
+    setErr(""); setBusy(true);
+    try { await api.split(order.wo, nums); onDone(); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  };
+  return (
+    <div className="modal" onClick={e => { if (e.target.className === "modal") onClose(); }}>
+      <div className="modal-inner" style={{ maxWidth: 520 }}>
+        <div className="modal-head">
+          <strong>Split WO {woNum(order)} — {total} panels</strong>
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+        <p className="hint" style={{ marginTop: 0 }}>Divide this order into boxes. Each box is made, tracked and delivered separately. All boxes start at the current stage.</p>
+        <label>Number of boxes</label>
+        <input type="number" min={2} max={total} value={n} onChange={e => setCount(e.target.value)} style={{ maxWidth: 130 }} />
+        <div style={{ marginTop: 12 }}>
+          {qtys.map((q, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <span style={{ width: 80, fontWeight: 500 }}>Box {i + 1}</span>
+              <input type="text" inputMode="numeric" pattern="[0-9]*" value={q} onChange={e => setQ(i, e.target.value)} style={{ maxWidth: 120 }} />
+              <span className="hint">panels</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 8, fontWeight: 600, color: valid ? "#1e8e3e" : "#d93025" }}>
+          Total: {sum} / {total} {valid ? "✓" : `— must equal ${total}`}
+        </div>
+        {err && <div style={{ color: "#d93025", marginTop: 8 }}>{err}</div>}
+        <div style={{ marginTop: 16, textAlign: "right" }}>
+          <button className="ghost" onClick={onClose}>Cancel</button>
+          <button className="act" style={{ marginLeft: 8 }} disabled={!valid || busy} onClick={confirm}>
+            {busy ? "Splitting…" : `Split into ${n} boxes`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -86,7 +171,7 @@ function Challan({ o, type, patch, meta }) {
       <tbody>
         <tr><td className="challan-yellow"><b>DATE:</b> <Inp path="s4.date" val={s.date} type="date" /></td>
             <td className="challan-yellow"><b>D.C. NO.:</b> <Inp path="s4.dcno" val={s.dcno || String(o.wo)} /></td></tr>
-        <tr><td className="challan-blue"><b>WO NO.:</b> {o.wo}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
+        <tr><td className="challan-blue"><b>WO NO.:</b> {woNum(o)}{boxTag(o)}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
         <tr><td colSpan={2} className="challan-blue"><b>CUSTOMER NAME:</b> {o.party}</td></tr>
         <tr><td className="challan-blue"><b>CONTRACTOR:</b> {o.s3.fabricator || "-"}</td><td className="challan-blue"><b>DESIGNER:</b> {o.designer}</td></tr>
         <tr><td colSpan={2} className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s4.weight" val={s.weight} type="number" /> KGS</td></tr>
@@ -113,7 +198,7 @@ function Challan({ o, type, patch, meta }) {
     <table style={{ height: "100%" }}>
       <tbody>
         <tr><td className="challan-blue"><b>DATE:</b> {o.date}</td><td className="challan-blue"><b>D.C. NO.:</b> {o.wo}</td></tr>
-        <tr><td className="challan-blue"><b>WO NO.:</b> {o.wo}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
+        <tr><td className="challan-blue"><b>WO NO.:</b> {woNum(o)}{boxTag(o)}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
         <tr><td colSpan={2} className="challan-blue"><b>CUSTOMER NAME:</b> {o.party}</td></tr>
         <tr><td className="challan-blue"><b>CONTRACTOR:</b> {o.s3.fabricator || "-"}</td><td className="challan-blue"><b>DESIGNER:</b> {o.designer}</td></tr>
         <tr><td className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s5.weight" val={s.weight} type="number" /> KGS</td>
@@ -152,8 +237,76 @@ function Challan({ o, type, patch, meta }) {
   );
 }
 
+/* ------------------------------------------------------- admin edit order */
+function EditOrderModal({ order, meta, onClose, onSaved }) {
+  const [f, setF] = useState({
+    date: order.date || "", designer: order.designer || "", party: order.party || "",
+    panelType: order.panelType || "", pono: order.pono || "", qty: order.qty || 0,
+    desc: order.desc || "", parts: order.parts || 0, custwo: order.custwo || "",
+    pcType: order.pcType || "Single Coat", cBody: order.cBody || "", cMP: order.cMP || "",
+    cBase: order.cBase || "", rate: order.rate || 0, remarks: order.remarks || ""
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const save = async () => {
+    if (!f.party.trim()) { setErr("Party name is required"); return; }
+    setBusy(true); setErr("");
+    try {
+      await api.patchOrder(order.wo, {
+        date: f.date, designer: f.designer, party: f.party.trim(), panelType: f.panelType,
+        pono: f.pono, qty: Number(f.qty) || 0, desc: f.desc, parts: Number(f.parts) || 0,
+        custwo: f.custwo, pcType: f.pcType, cBody: f.cBody, cMP: f.cMP, cBase: f.cBase,
+        rate: Number(f.rate) || 0, remarks: f.remarks
+      });
+      onSaved();
+    } catch (e) { setErr(e.message); setBusy(false); }
+  };
+  const designers = (meta && meta.designers) || [];
+  return (
+    <div className="modal" onClick={e => { if (e.target.className === "modal") onClose(); }}>
+      <div className="modal-inner" style={{ maxWidth: 640 }}>
+        <div className="modal-head">
+          <strong>Edit WO {woNum(order)}{boxTag(order)}</strong>
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="grid2">
+          <div><label>Date</label><input type="date" value={f.date} onChange={e => set("date", e.target.value)} /></div>
+          <div><label>Designer</label>
+            <select value={f.designer} onChange={e => set("designer", e.target.value)}>
+              <option value="">— select —</option>
+              {designers.map(d => <option key={d}>{d}</option>)}
+              {f.designer && !designers.includes(f.designer) && <option>{f.designer}</option>}
+            </select></div>
+          <div><label>Party Name *</label><input value={f.party} onChange={e => set("party", e.target.value)} /></div>
+          <div><label>Panel Type</label><input value={f.panelType} onChange={e => set("panelType", e.target.value)} /></div>
+          <div><label>Size (Description)</label><input value={f.desc} onChange={e => set("desc", e.target.value)} /></div>
+          <div><label>Qty (panels)</label><input type="text" inputMode="numeric" value={f.qty} onChange={e => /^\d*$/.test(e.target.value) && set("qty", e.target.value)} /></div>
+          <div><label>Parts (Bhag)</label><input type="text" inputMode="numeric" value={f.parts} onChange={e => /^\d*$/.test(e.target.value) && set("parts", e.target.value)} /></div>
+          <div><label>P.O. No.</label><input value={f.pono} onChange={e => set("pono", e.target.value)} /></div>
+          <div><label>Customer WO</label><input value={f.custwo} onChange={e => set("custwo", e.target.value)} /></div>
+          <div><label>Powder Coating</label>
+            <select value={f.pcType} onChange={e => set("pcType", e.target.value)}>
+              <option>Single Coat</option><option>Double Coat</option>
+            </select></div>
+          <div><label>Body Colour</label><input value={f.cBody} onChange={e => set("cBody", e.target.value)} /></div>
+          <div><label>Mounting Plate Colour</label><input value={f.cMP} onChange={e => set("cMP", e.target.value)} /></div>
+          <div><label>Base Colour</label><input value={f.cBase} onChange={e => set("cBase", e.target.value)} /></div>
+          <div><label>Rate</label><input type="text" inputMode="decimal" value={f.rate} onChange={e => set("rate", e.target.value)} /></div>
+        </div>
+        <label>Remarks</label><input value={f.remarks} onChange={e => set("remarks", e.target.value)} />
+        {err && <div style={{ color: "#d93025", marginTop: 8 }}>{err}</div>}
+        <div style={{ marginTop: 16, textAlign: "right" }}>
+          <button className="ghost" onClick={onClose}>Cancel</button>
+          <button className="act" style={{ marginLeft: 8 }} disabled={busy} onClick={save}>{busy ? "Saving…" : "Save changes"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ stages */
-function Dashboard({ orders }) {
+function Dashboard({ orders, isAdmin, meta, onEdit, onDelete }) {
   const total = orders.length;
   const c = { 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
   orders.forEach(o => c[o.stage]++);
@@ -170,9 +323,13 @@ function Dashboard({ orders }) {
       <div className="card">
         <div className="toolbar"><strong>All Work Orders</strong><span className="pill">{total} orders</span></div>
         {total === 0 ? <div className="empty">No work orders yet. Use Stage 01 or load demo data.</div> :
-          <table><thead><tr><th>WO</th><th>Date</th><th>Designer</th><th>Party</th><th>Panel</th><th>Size</th><th>Qty</th><th>Status</th></tr></thead>
+          <table><thead><tr><th>WO</th><th>Date</th><th>Designer</th><th>Party</th><th>Panel</th><th>Size</th><th>Qty</th><th>Status</th>{isAdmin && <th>Order</th>}</tr></thead>
             <tbody>{orders.slice().reverse().map(o =>
-              <tr key={o.wo}><td>{o.wo}</td><td>{o.date}</td><td>{o.designer}</td><td>{o.party}</td><td>{o.panelType}</td><td>{o.desc}</td><td className="num">{o.qty}</td><td><Badge stage={o.stage} /></td></tr>)}
+              <tr key={o.wo}><td>{woNum(o)}{o.boxes > 1 ? ` ·B${o.box}/${o.boxes}` : ""}</td><td>{o.date}</td><td>{o.designer}</td><td>{o.party}</td><td>{o.panelType}</td><td>{o.desc}</td><td className="num">{o.qty}</td><td><Badge stage={o.stage} /></td>
+                {isAdmin && <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="mini b-grey" style={{ marginRight: 6 }} onClick={() => onEdit(o)}>✎ Edit</button>
+                  <button className="danger" onClick={() => onDelete(o)}>🗑 Delete</button>
+                </td>}</tr>)}
             </tbody></table>}
       </div>
     </div>
@@ -297,7 +454,7 @@ function StageOne({ meta, nextWO, onCreated }) {
 }
 
 /* table-based stages 2 & 3 */
-function TableStage({ title, handler, stageNo, orders, meta, patch, advance, openMap, setOpen }) {
+function TableStage({ title, handler, stageNo, orders, meta, patch, advance, openMap, setOpen, onSplit }) {
   const list = orders.filter(o => o.stage >= stageNo);
   const inc = list.filter(o => o.stage === stageNo);
   const done = list.filter(o => o.stage > stageNo);
@@ -308,9 +465,10 @@ function TableStage({ title, handler, stageNo, orders, meta, patch, advance, ope
   const row = (o) => {
     const s = o["s" + stageNo];
     const locked = o.stage > stageNo;
+    const overdue = o.stage === stageNo && isOverdue(o);
     return (
-      <tr key={o.wo}>
-        <td>WO. NO. – {o.wo}</td>
+      <tr key={o.wo} className={overdue ? "overdue-row" : ""}>
+        <td>WO. NO. – {woNum(o)}{boxTag(o)}{overdue && <span className="od-badge">⚠ {daysInCurrentStage(o)}d</span>}</td>
         <td className="auto-cell">{o.designer}</td>
         <td className="auto-cell">{o.date}</td>
         <td className="auto-cell">{o.party}</td>
@@ -326,8 +484,11 @@ function TableStage({ title, handler, stageNo, orders, meta, patch, advance, ope
           <label className="chk" style={{ display: "inline-flex", marginRight: 10 }}><input type="checkbox" checked={!!s.ok} disabled={locked} onChange={e => okToggle(o, "ok", e.target.checked)} /> OK</label>
           <label className="chk" style={{ display: "inline-flex" }}><input type="checkbox" checked={!!s.notok} disabled={locked} onChange={e => okToggle(o, "notok", e.target.checked)} /> NOT OK</label>
         </td>
-        <td>{o.stage === stageNo
-          ? <button className="mini b-green" onClick={() => advance(o.wo, stageNo + 1)}>{stageNo === 2 ? "Send → Fabrication" : "Send → P.C."}</button>
+        <td style={{ whiteSpace: "nowrap" }}>{o.stage === stageNo
+          ? <>
+              <button className="mini b-green" onClick={() => advance(o.wo, stageNo + 1)}>{stageNo === 2 ? "Send → Fabrication" : "Send → P.C."}</button>
+              {o.qty > 1 && <button className="mini b-grey" style={{ marginLeft: 6 }} onClick={() => onSplit(o)}>✂ Split</button>}
+            </>
           : <span className="status st-done">Done</span>}</td>
       </tr>
     );
@@ -358,7 +519,7 @@ function TableStage({ title, handler, stageNo, orders, meta, patch, advance, ope
 }
 
 /* card-based stages 4 & 5 */
-function CardStage({ which, orders, patch, advance, dispatch, openChallan, openMap, setOpen, meta }) {
+function CardStage({ which, orders, patch, advance, dispatch, openChallan, openMap, setOpen, meta, onSplit }) {
   const stageNo = which === 4 ? 4 : 5;
   const inc = orders.filter(o => o.stage === stageNo);
   const done = orders.filter(o => which === 4 ? o.stage > 4 : o.stage === 6);
@@ -366,56 +527,78 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
     patch(o.wo, w === "ok" ? { "s5.ok": checked, "s5.notok": checked ? false : o.s5.notok }
                            : { "s5.notok": checked, "s5.ok": checked ? false : o.s5.ok });
 
-  const incCard = (o) => which === 4 ? (
-    <div className="card" key={o.wo}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <strong>WO. NO. – {o.wo} · {o.party}</strong>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button className="mini b-blue no-print" onClick={() => openChallan(o, "pc")}>🖨 Print</button>
-          <button className="mini b-green no-print" onClick={() => advance(o.wo, 5)}>START → Assembly</button>
-        </div>
+  const incCard = (o) => {
+    const cardId = `card_${o.wo}`;
+    const cardOpen = !!openMap[cardId];
+    const toggle = () => setOpen(s => ({ ...s, [cardId]: !s[cardId] }));
+    const openBtn = (
+      <button className="mini b-grey no-print" onClick={toggle}>
+        {cardOpen ? "▾ Hide full challan" : "▸ Open full challan"}
+      </button>
+    );
+    // compact one-line summary shown when collapsed
+    const summary = (
+      <div className="challan-blue" style={{ padding: "8px 10px", borderRadius: 6, fontSize: 12, marginBottom: cardOpen ? 12 : 0 }}>
+        <b>{o.party}</b> &nbsp;·&nbsp; {o.panelType || "-"} &nbsp;·&nbsp; {o.desc || "-"} &nbsp;·&nbsp;
+        <b>Qty {o.qty}</b> &nbsp;·&nbsp; Parts {o.parts}
+        {which === 4 && o.s3.fabricator ? <> &nbsp;·&nbsp; {o.s3.fabricator}</> : null}
+        {which === 5 ? <> &nbsp;·&nbsp; {o.s5.received ? "Received" : "Not received"}{o.s5.ok ? " · P.C. OK" : o.s5.notok ? " · P.C. NOT OK" : ""}</> : null}
       </div>
-      <table style={{ maxWidth: 430, marginBottom: 14 }}><tbody>
-        <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600 }}>WO. NO. -- {o.wo}</td></tr>
-        <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600 }}>{o.s3.fabricator || o.designer}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600, width: 130 }}>PARTY NAME</td><td className="challan-blue">{o.party}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PANEL TYPE</td><td className="challan-blue">{o.panelType}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>QTY</td><td className="challan-blue">{o.qty}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>DESCRIPTION</td><td className="challan-blue">{o.desc}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PART (BHAG)</td><td className="challan-blue">{o.parts}</td></tr>
-        <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600, padding: 8 }}>READY TO DISPATCH</td></tr>
-      </tbody></table>
-      <Challan o={o} type="pc" patch={(set) => patch(o.wo, set)} meta={meta} />
-    </div>
-  ) : (
-    <div className="card" key={o.wo}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <strong>WO. NO. – {o.wo} · {o.party}</strong>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button className="mini b-blue no-print" onClick={() => openChallan(o, "dispatch")}>🖨 Print</button>
-          <button className="mini b-green no-print" onClick={() => dispatch(o.wo)}>OK → DISPATCH</button>
+    );
+    const overdue = isOverdue(o);
+    return (
+      <div className={overdue ? "card overdue-row" : "card"} key={o.wo}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+          <strong>{woTitle(o)} · {o.party}{overdue && <span className="od-badge">⚠ {daysInCurrentStage(o)}d in stage</span>}</strong>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {openBtn}
+            <button className="mini b-blue no-print" onClick={() => openChallan(o, which === 4 ? "pc" : "dispatch")}>🖨 Print</button>
+            {o.qty > 1 && <button className="mini b-grey no-print" onClick={() => onSplit(o)}>✂ Split</button>}
+            {which === 4
+              ? <button className="mini b-green no-print" onClick={() => advance(o.wo, 5)}>START → Assembly</button>
+              : <button className="mini b-green no-print" onClick={() => dispatch(o.wo)}>OK → DISPATCH</button>}
+          </div>
         </div>
+        {summary}
+        {cardOpen && (which === 4 ? (
+          <>
+            <table style={{ maxWidth: 430, margin: "0 0 14px" }}><tbody>
+              <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600 }}>WO. NO. -- {woNum(o)}{boxTag(o)}</td></tr>
+              <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600 }}>{o.s3.fabricator || o.designer}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600, width: 130 }}>PARTY NAME</td><td className="challan-blue">{o.party}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PANEL TYPE</td><td className="challan-blue">{o.panelType}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>QTY</td><td className="challan-blue">{o.qty}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>DESCRIPTION</td><td className="challan-blue">{o.desc}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PART (BHAG)</td><td className="challan-blue">{o.parts}</td></tr>
+              <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600, padding: 8 }}>READY TO DISPATCH</td></tr>
+            </tbody></table>
+            <Challan o={o} type="pc" patch={(set) => patch(o.wo, set)} meta={meta} />
+          </>
+        ) : (
+          <>
+            <table style={{ maxWidth: 460, margin: "0 0 14px" }}><tbody>
+              <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600 }}>WO. NO. -- {woNum(o)}{boxTag(o)}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600, width: 130 }}>PARTY NAME</td><td className="challan-blue">{o.party}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PANEL TYPE</td><td className="challan-blue">{o.panelType}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>QTY</td><td className="challan-blue">{o.qty}</td></tr>
+              <tr><td className="challan-blue" style={{ fontWeight: 600 }}>DESCRIPTION</td><td className="challan-blue">{o.desc}</td></tr>
+              <tr><td colSpan={2} style={{ padding: 6 }}>
+                <label className="chk" style={{ display: "inline-flex", marginRight: 14 }}><input type="checkbox" checked={!!o.s5.received} onChange={e => patch(o.wo, { "s5.received": e.target.checked })} /> RECEIVED</label>
+                <label className="chk" style={{ display: "inline-flex", marginRight: 14 }}><input type="checkbox" checked={!!o.s5.ok} onChange={e => okToggle(o, "ok", e.target.checked)} /> P.C. OK</label>
+                <label className="chk" style={{ display: "inline-flex" }}><input type="checkbox" checked={!!o.s5.notok} onChange={e => okToggle(o, "notok", e.target.checked)} /> P.C. NOT OK</label>
+              </td></tr>
+              <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600, padding: 8 }}>ASSEMBLY (READY TO DISPATCH)</td></tr>
+            </tbody></table>
+            <Challan o={o} type="dispatch" patch={(set) => patch(o.wo, set)} meta={meta} />
+          </>
+        ))}
       </div>
-      <table style={{ maxWidth: 460, marginBottom: 14 }}><tbody>
-        <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600 }}>WO. NO. -- {o.wo}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600, width: 130 }}>PARTY NAME</td><td className="challan-blue">{o.party}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>PANEL TYPE</td><td className="challan-blue">{o.panelType}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>QTY</td><td className="challan-blue">{o.qty}</td></tr>
-        <tr><td className="challan-blue" style={{ fontWeight: 600 }}>DESCRIPTION</td><td className="challan-blue">{o.desc}</td></tr>
-        <tr><td colSpan={2} style={{ padding: 6 }}>
-          <label className="chk" style={{ display: "inline-flex", marginRight: 14 }}><input type="checkbox" checked={!!o.s5.received} onChange={e => patch(o.wo, { "s5.received": e.target.checked })} /> RECEIVED</label>
-          <label className="chk" style={{ display: "inline-flex", marginRight: 14 }}><input type="checkbox" checked={!!o.s5.ok} onChange={e => okToggle(o, "ok", e.target.checked)} /> P.C. OK</label>
-          <label className="chk" style={{ display: "inline-flex" }}><input type="checkbox" checked={!!o.s5.notok} onChange={e => okToggle(o, "notok", e.target.checked)} /> P.C. NOT OK</label>
-        </td></tr>
-        <tr><td colSpan={2} style={{ background: "var(--accent)", color: "#fff", textAlign: "center", fontWeight: 600, padding: 8 }}>ASSEMBLY (READY TO DISPATCH)</td></tr>
-      </tbody></table>
-      <Challan o={o} type="dispatch" patch={(set) => patch(o.wo, set)} meta={meta} />
-    </div>
-  );
+    );
+  };
 
   const doneCard = (o) => (
     <div className="card" key={o.wo}>
-      <div style={{ background: "var(--accent)", color: "#fff", textAlign: "center", padding: 6, fontWeight: 600, borderRadius: 4 }}>WO. NO. – {o.wo}</div>
+      <div style={{ background: "var(--accent)", color: "#fff", textAlign: "center", padding: 6, fontWeight: 600, borderRadius: 4 }}>{woTitle(o)}</div>
       <table style={{ margin: "8px 0" }}><tbody>
         <tr><td className="auto-cell">Party</td><td className="auto-cell">{o.party}</td></tr>
         <tr><td className="auto-cell">Panel</td><td className="auto-cell">{o.panelType}</td></tr>
@@ -451,36 +634,185 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
   );
 }
 
+function monthRange(offset = 0) {
+  const d = new Date(); d.setMonth(d.getMonth() + offset);
+  const y = d.getFullYear(), m = d.getMonth();
+  const p = (x) => String(x).padStart(2, "0");
+  return { from: `${y}-${p(m + 1)}-01`, to: `${y}-${p(m + 1)}-${p(new Date(y, m + 1, 0).getDate())}` };
+}
+
 function Reports() {
-  const [month, setMonth] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [data, setData] = useState(null);
-  const load = useCallback(() => api.reports(month).then(setData).catch(e => alert(e.message)), [month]);
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(() => {
+    setLoading(true);
+    api.reports({ from, to }).then(setData).catch(e => alert(e.message)).finally(() => setLoading(false));
+  }, [from, to]);
   useEffect(() => { load(); }, [load]);
-  const Tbl = ({ head, rows }) => rows.length
-    ? <table><thead><tr>{head.map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className={j ? "num" : ""}>{c}</td>)}</tr>)}</tbody></table>
-    : <div className="empty">No data.</div>;
+
+  const preset = (which) => {
+    if (which === "all") { setFrom(""); setTo(""); }
+    else if (which === "thisMonth") { const r = monthRange(0); setFrom(r.from); setTo(r.to); }
+    else if (which === "lastMonth") { const r = monthRange(-1); setFrom(r.from); setTo(r.to); }
+    else if (which === "thisYear") { const y = new Date().getFullYear(); setFrom(`${y}-01-01`); setTo(`${y}-12-31`); }
+  };
+
+  const rangeLabel = from || to ? `${from || "start"}  →  ${to || "today"}` : "All time";
+  const fileTag = from || to ? `${from || "start"}_to_${to || "today"}` : "all-time";
+
+  const exportExcel = async () => {
+    if (!data) return;
+    let XLSX = window.XLSX;
+    if (!XLSX) {
+      try {
+        XLSX = await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+          s.onload = () => resolve(window.XLSX);
+          s.onerror = () => reject(new Error("load failed"));
+          document.head.appendChild(s);
+        });
+      } catch { alert("Excel export needs an internet connection (it loads the SheetJS library). The PDF / Print export works offline."); return; }
+    }
+    if (!XLSX) { alert("Could not load the Excel library. Use PDF / Print instead."); return; }
+    const c = data.company;
+    const st = data.stageTiming || {};
+    const wb = XLSX.utils.book_new();
+    const aoa = (a) => XLSX.utils.aoa_to_sheet(a);
+    const add = (a, name) => XLSX.utils.book_append_sheet(wb, aoa(a), name);
+    add([
+      ["NK TECHNO CRAFT INDIA PVT. LTD."],
+      ["Production Reports — completed (dispatched) work"],
+      ["Date range", rangeLabel],
+      ["Generated", new Date().toLocaleString()],
+      [],
+      ["COMPANY TOTAL"],
+      ["Orders done", c.orders],
+      ["Panels done", c.panels],
+      ["On time", c.onTime],
+      ["Late", c.late],
+      ["No target date", c.noTarget],
+      ["On-time %", c.onTimePct === null ? "—" : c.onTimePct],
+      ["Avg late (days)", c.avgLateDays],
+      ["Max late (days)", c.maxLateDays],
+      ["Stage 02 over 3 days", c.s2Over3 ?? 0],
+      ["Stage 05 over 3 days", c.s5Over3 ?? 0],
+      ["Total dispatch (KGS)", c.totalKgs],
+      [],
+      ["AVG DAYS PER STAGE"],
+      ["Stage 02 (Cutting)", st.avgS2 ?? "—"],
+      ["Stage 03 (Fabrication)", st.avgS3 ?? "—"],
+      ["Stage 04 (Dispatch P.C.)", st.avgS4 ?? "—"],
+      ["Stage 05 (Assembly)", st.avgS5 ?? "—"],
+      ["Total lead time", st.avgLead ?? "—"]
+    ], "Summary");
+    add([["Designer", "Orders", "Panels"], ...data.designerWork.map(r => [r.name, r.orders, r.panels])], "Designer Work");
+    add([["Contractor", "Orders", "Panels"], ...data.contractorWork.map(r => [r.name, r.orders, r.panels])], "Contractor Work");
+    const timing = (rows) => [["Name", "Orders", "On time", "Late", "On-time %", "Avg late days", "Max late days"],
+      ...rows.map(r => [r.name, r.orders, r.onTime, r.late, r.onTimePct === null ? "—" : r.onTimePct, r.avgLateDays, r.maxLateDays])];
+    add(timing(data.designerTiming), "Designer Timing");
+    add(timing(data.contractorTiming), "Contractor Timing");
+    add([["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery date", "Completed date", "Late days", "Status", "S2 days", "S5 days", "S2 >3d", "S5 >3d", "Lead days"],
+      ...data.detail.map(d => [d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate, d.completedDate, d.lateDays, d.status, d.s2Days, d.s5Days, d.s2Late ? "YES" : "", d.s5Late ? "YES" : "", d.leadDays])], "Order Detail");
+    XLSX.writeFile(wb, `NK-Reports_${fileTag}.xlsx`);
+  };
+
+  const Tbl = ({ head, rows, aligns }) => rows.length
+    ? <table><thead><tr>{head.map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r, i) => <tr key={i}>{r.map((cl, j) => <td key={j} className={(aligns ? aligns[j] : (j ? "num" : ""))}>{cl}</td>)}</tr>)}</tbody></table>
+    : <div className="empty">No completed work in this range.</div>;
+
+  const pct = (v) => v === null ? "—" : v + "%";
+  const c = data && data.company;
+
   return (
     <div className="view">
-      <h2 className="title">Monthly Reports</h2>
-      <div className="toolbar">
-        <div><label style={{ display: "inline" }}>Month filter </label>
-          <input type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ width: "auto", display: "inline-block", background: "#fff" }} />
-          <button className="ghost" style={{ marginLeft: 8 }} onClick={() => setMonth("")}>All time</button></div>
-        <button className="ghost no-print" onClick={() => window.print()}>🖨 Print / PDF</button>
-      </div>
-      {data && <>
-        <div className="grid2">
-          <div className="card"><strong>1 · Designer-wise Work</strong>
-            <Tbl head={["Designer", "Orders", "Total Qty"]} rows={data.designerWise.map(r => [r.name, r.orders, r.qty])} /></div>
-          <div className="card"><strong>2 · Fabricator (Team-wise) Work</strong>
-            <Tbl head={["Fabricator Team", "Orders", "Total Qty"]} rows={data.fabricatorWise.map(r => [r.name, r.orders, r.qty])} /></div>
+      <h2 className="title">Reports</h2>
+      <div className="handler">Covers completed (dispatched) work. “Late” compares the actual dispatch date against the Stage&nbsp;03 delivery date.</div>
+
+      <div className="toolbar no-print" style={{ flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <label style={{ display: "inline" }}>From</label>
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ width: "auto", display: "inline-block", background: "#fff" }} />
+          <label style={{ display: "inline" }}>To</label>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ width: "auto", display: "inline-block", background: "#fff" }} />
+          <button className="ghost" onClick={() => preset("thisMonth")}>This month</button>
+          <button className="ghost" onClick={() => preset("lastMonth")}>Last month</button>
+          <button className="ghost" onClick={() => preset("thisYear")}>This year</button>
+          <button className="ghost" onClick={() => preset("all")}>All time</button>
         </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="act" onClick={exportExcel}>⬇ Excel</button>
+          <button className="ghost" onClick={() => window.print()}>🖨 PDF / Print</button>
+        </div>
+      </div>
+
+      <div className="print-only" style={{ marginBottom: 8 }}>
+        <strong>NK TECHNO CRAFT INDIA PVT. LTD. — Production Reports</strong><br />
+        <span className="hint">Range: {rangeLabel} · Generated {new Date().toLocaleString()}</span>
+      </div>
+
+      {loading && <div className="empty">Loading…</div>}
+
+      {data && data.company && !loading && <>
+        {/* 5 · Company total */}
+        <div className="card" style={{ borderTop: "4px solid var(--accent)" }}>
+          <strong>5 · Whole Company — NK Techno Craft</strong>
+          <div className="kpis">
+            <div className="kpi"><div className="kpi-n">{c.orders}</div><div className="kpi-l">Orders done</div></div>
+            <div className="kpi"><div className="kpi-n">{c.panels}</div><div className="kpi-l">Panels done</div></div>
+            <div className="kpi"><div className="kpi-n" style={{ color: "#1e8e3e" }}>{c.onTime}</div><div className="kpi-l">On time</div></div>
+            <div className="kpi"><div className="kpi-n" style={{ color: "#d93025" }}>{c.late}</div><div className="kpi-l">Late</div></div>
+            <div className="kpi"><div className="kpi-n">{pct(c.onTimePct)}</div><div className="kpi-l">On-time rate</div></div>
+            <div className="kpi"><div className="kpi-n">{c.avgLateDays}</div><div className="kpi-l">Avg late (days)</div></div>
+            <div className="kpi"><div className="kpi-n">{c.maxLateDays}</div><div className="kpi-l">Worst late (days)</div></div>
+            <div className="kpi"><div className="kpi-n" style={{ color: c.s2Over3 ? "#d93025" : undefined }}>{c.s2Over3 ?? 0}</div><div className="kpi-l">Stage 02 &gt; 3 days</div></div>
+            <div className="kpi"><div className="kpi-n" style={{ color: c.s5Over3 ? "#d93025" : undefined }}>{c.s5Over3 ?? 0}</div><div className="kpi-l">Stage 05 &gt; 3 days</div></div>
+            <div className="kpi"><div className="kpi-n">{c.totalKgs.toLocaleString()}</div><div className="kpi-l">Dispatch KGS</div></div>
+          </div>
+          {c.noTarget > 0 && <div className="hint" style={{ marginTop: 6 }}>{c.noTarget} order(s) had no Stage 03 delivery date and are excluded from on-time/late.</div>}
+        </div>
+
         <div className="grid2">
-          <div className="card"><strong>3 · Powder Coating Contractor Work</strong>
-            <Tbl head={["P.C. Location", "Orders", "KGS"]} rows={data.powderCoating.map(r => [r.name, r.orders, r.kgs.toLocaleString()])} /></div>
-          <div className="card"><strong>4 · Total Dispatch in KGS</strong>
-            <Tbl head={["WO", "Party", "KGS"]} rows={data.dispatch.rows.map(r => [r.wo, r.party, r.kgs.toLocaleString()])} />
-            <div style={{ textAlign: "right", fontWeight: 600, marginTop: 8 }}>TOTAL DISPATCH: {data.dispatch.totalKgs.toLocaleString()} KGS</div></div>
+          <div className="card"><strong>1 · Work Done — by Designer</strong>
+            <Tbl head={["Designer", "Orders", "Panels"]} rows={data.designerWork.map(r => [r.name, r.orders, r.panels])} /></div>
+          <div className="card"><strong>2 · Work Done — by Contractor</strong>
+            <Tbl head={["Contractor (Fabricator)", "Orders", "Panels"]} rows={data.contractorWork.map(r => [r.name, r.orders, r.panels])} /></div>
+        </div>
+
+        <div className="grid2">
+          <div className="card"><strong>3 · Designer — On-time vs Late</strong>
+            <Tbl head={["Designer", "Orders", "On time", "Late", "On-time %", "Avg late", "Max late"]}
+              rows={data.designerTiming.map(r => [r.name, r.orders, r.onTime, r.late, pct(r.onTimePct), r.avgLateDays, r.maxLateDays])} /></div>
+          <div className="card"><strong>4 · Contractor — On-time vs Late</strong>
+            <Tbl head={["Contractor", "Orders", "On time", "Late", "On-time %", "Avg late", "Max late"]}
+              rows={data.contractorTiming.map(r => [r.name, r.orders, r.onTime, r.late, pct(r.onTimePct), r.avgLateDays, r.maxLateDays])} /></div>
+        </div>
+
+        {data.stageTiming && <div className="card"><strong>Stage timing — average days each stage holds the work</strong>
+          <div className="kpis">
+            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS2 ?? "—"}</div><div className="kpi-l">Stage 02 (Cutting)</div></div>
+            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS3 ?? "—"}</div><div className="kpi-l">Stage 03 (Fabrication)</div></div>
+            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS4 ?? "—"}</div><div className="kpi-l">Stage 04 (Dispatch P.C.)</div></div>
+            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS5 ?? "—"}</div><div className="kpi-l">Stage 05 (Assembly)</div></div>
+            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgLead ?? "—"}</div><div className="kpi-l">Total lead time</div></div>
+          </div>
+          <div className="hint" style={{ marginTop: 6 }}>Red figures in the table below = more than {data.stageTiming.slaDays} days in Stage 02 or Stage 05.</div>
+        </div>}
+
+        <div className="card"><strong>Order detail ({data.detail.length})</strong>
+          <Tbl
+            head={["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery", "Completed", "Late days", "Status", "S2 days", "S5 days", "Lead"]}
+            aligns={["", "", "", "", "", "num", "", "", "num", "", "num", "num", "num"]}
+            rows={data.detail.map(d => [
+              d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate || "—", d.completedDate,
+              d.lateDays === "" ? "—" : d.lateDays,
+              <span key="s" style={{ color: d.status === "Late" ? "#d93025" : d.status === "On time" ? "#1e8e3e" : "var(--muted)", fontWeight: 600 }}>{d.status}</span>,
+              <span key="s2" style={{ color: d.s2Late ? "#d93025" : undefined, fontWeight: d.s2Late ? 700 : 400 }}>{d.s2Days === "" ? "—" : d.s2Days}</span>,
+              <span key="s5" style={{ color: d.s5Late ? "#d93025" : undefined, fontWeight: d.s5Late ? 700 : 400 }}>{d.s5Days === "" ? "—" : d.s5Days}</span>,
+              d.leadDays === "" ? "—" : d.leadDays
+            ])} />
         </div>
       </>}
     </div>
@@ -599,6 +931,8 @@ export default function App() {
   const [err, setErr] = useState("");
   const [ready, setReady] = useState(false);
   const [challan, setChallan] = useState(null); // {o, type}
+  const [splitFor, setSplitFor] = useState(null); // order being split
+  const [editOrder, setEditOrder] = useState(null); // order being edited (admin)
 
   const logout = useCallback(() => { setToken(null); setUser(null); setReady(false); }, []);
 
@@ -641,6 +975,10 @@ export default function App() {
     if (o && (!o.s5.weight || Number(o.s5.weight) <= 0) && !confirm("No final weight entered — KGS report won't count this. Dispatch anyway?")) return;
     try { const u = await api.dispatch(wo); setOrders(os => os.map(x => x.wo === wo ? u : x)); alert("WO " + wo + " dispatched. ✔"); } catch (e) { alert(e.message); }
   };
+  const removeOrder = async (o) => {
+    if (!confirm(`Delete WO ${woNum(o)}${o.boxes > 1 ? ` · Box ${o.box}/${o.boxes}` : ""} (${o.party})? This cannot be undone.`)) return;
+    try { await api.delOrder(o.wo); setOrders(os => os.filter(x => x.wo !== o.wo)); } catch (e) { alert(e.message); }
+  };
   const seed = async () => { if (orders.length && !confirm("Load demo WO 101 & 102? This replaces current orders.")) return; await api.seed(); refresh(); };
   const wipe = async () => { if (confirm("Erase ALL work orders? (Designer/contractor lists are kept.)")) { await api.wipe(); refresh(); } };
 
@@ -680,18 +1018,35 @@ export default function App() {
           </>}
         </div>
 
+        {(() => {
+          const od = orders.filter(isOverdue);
+          if (!od.length) return null;
+          return (
+            <div className="alert-banner no-print">
+              <div className="alert-head">⚠ {od.length} order{od.length > 1 ? "s" : ""} stuck more than {SLA_DAYS} days {isAdmin ? "(Stage 02 / 05)" : "in your stage"} — needs attention</div>
+              <div className="alert-list">
+                {od.map(o => (
+                  <span key={o.wo} className="alert-chip">
+                    WO {woNum(o)}{boxTag(o)} · {(STAGE_NAMES[o.stage] || "Stage " + o.stage).replace(/ ·.*/, "")} · <b>{daysInCurrentStage(o)}d</b> · {o.party}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {err && <div className="empty" style={{ borderColor: "#f3c0bc", color: "#d93025" }}>
           API error: {err}. Make sure the backend is running on :4000 and MongoDB is up.</div>}
         {!ready ? <div className="empty">Loading…</div> : <>
-          {view === "dashboard" && isAdmin && <Dashboard orders={orders} />}
+          {view === "dashboard" && isAdmin && <Dashboard orders={orders} isAdmin={isAdmin} meta={meta} onEdit={setEditOrder} onDelete={removeOrder} />}
           {view === "general" && isAdmin && <General meta={meta} orders={orders} refresh={refresh} />}
           {view === "users" && isAdmin && <UsersAdmin currentUser={user} />}
           {view === "reports" && isAdmin && <Reports />}
           {view === "stage1" && <StageOne meta={meta} nextWO={meta.nextWO} onCreated={refresh} />}
-          {view === "stage2" && <TableStage title="Stage 02 — Cutting & Bending" handler="Handled by Mukesh Sodha / Deepak Vacheta" stageNo={2} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} />}
-          {view === "stage3" && <TableStage title="Stage 03 — Fabrication" handler="Handled by Irfan Belim" stageNo={3} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} />}
-          {view === "stage4" && <CardStage which={4} orders={orders} patch={patch} advance={advance} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} meta={meta} />}
-          {view === "stage5" && <CardStage which={5} orders={orders} patch={patch} advance={advance} dispatch={dispatch} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} meta={meta} />}
+          {view === "stage2" && <TableStage title="Stage 02 — Cutting & Bending" handler="Handled by Mukesh Sodha / Deepak Vacheta" stageNo={2} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} onSplit={setSplitFor} />}
+          {view === "stage3" && <TableStage title="Stage 03 — Fabrication" handler="Handled by Irfan Belim" stageNo={3} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} onSplit={setSplitFor} />}
+          {view === "stage4" && <CardStage which={4} orders={orders} patch={patch} advance={advance} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} meta={meta} onSplit={setSplitFor} />}
+          {view === "stage5" && <CardStage which={5} orders={orders} patch={patch} advance={advance} dispatch={dispatch} openChallan={(o, type) => setChallan({ o, type })} openMap={openMap} setOpen={setOpen} meta={meta} onSplit={setSplitFor} />}
         </>}
       </main>
 
@@ -699,7 +1054,7 @@ export default function App() {
         <div className="modal" onClick={e => { if (e.target.className === "modal") setChallan(null); }}>
           <div className="modal-inner">
             <div className="modal-head no-print">
-              <strong>{challan.type === "pc" ? "Challan for Powder Coating" : "Challan for Dispatch"} — WO {challanOrder.wo}</strong>
+              <strong>{challan.type === "pc" ? "Challan for Powder Coating" : "Challan for Dispatch"} — WO {woNum(challanOrder)}{boxTag(challanOrder)}</strong>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="ghost" onClick={() => window.print()}>🖨 Print / Save PDF</button>
                 <button className="ghost" onClick={() => setChallan(null)}>Close</button>
@@ -708,6 +1063,23 @@ export default function App() {
             <Challan o={challanOrder} type={challan.type} patch={(set) => patch(challanOrder.wo, set)} meta={meta} />
           </div>
         </div>
+      )}
+
+      {splitFor && (
+        <SplitModal
+          order={splitFor}
+          onClose={() => setSplitFor(null)}
+          onDone={() => { setSplitFor(null); refresh(); }}
+        />
+      )}
+
+      {editOrder && (
+        <EditOrderModal
+          order={editOrder}
+          meta={meta}
+          onClose={() => setEditOrder(null)}
+          onSaved={() => { setEditOrder(null); refresh(); }}
+        />
       )}
     </>
   );
