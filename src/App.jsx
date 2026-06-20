@@ -646,6 +646,8 @@ function Reports() {
   const [to, setTo] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
+  const [q, setQ] = useState(""); // search by designer / operator name
   const load = useCallback(() => {
     setLoading(true);
     api.reports({ from, to }).then(setData).catch(e => alert(e.message)).finally(() => setLoading(false));
@@ -725,11 +727,83 @@ function Reports() {
 
   const pct = (v) => v === null ? "—" : v + "%";
   const c = data && data.company;
+  const st = (data && data.stageTiming) || {};
+
+  // merge "work done" + "on-time/late" into one row per person
+  const mergePeople = (work, timing) => {
+    const m = {};
+    (work || []).forEach(w => { m[w.name] = { name: w.name, orders: w.orders, panels: w.panels, onTime: 0, late: 0, noTarget: 0, onTimePct: null, avgLateDays: 0 }; });
+    (timing || []).forEach(t => { m[t.name] = { ...(m[t.name] || { name: t.name, orders: t.orders, panels: 0 }), onTime: t.onTime, late: t.late, noTarget: t.noTarget, onTimePct: t.onTimePct, avgLateDays: t.avgLateDays }; });
+    return Object.values(m).sort((a, b) => b.panels - a.panels);
+  };
+  const designers = data ? mergePeople(data.designerWork, data.designerTiming) : [];
+  const contractors = data ? mergePeople(data.contractorWork, data.contractorTiming) : [];
+  const maxPanels = Math.max(1, ...designers.map(d => d.panels), ...contractors.map(d => d.panels));
+
+  // name search (designer or operator/contractor)
+  const personNames = data ? [...new Set([...designers.map(d => d.name), ...contractors.map(c => c.name)])].filter(n => n && n !== "—").sort() : [];
+  const nq = q.trim().toLowerCase();
+  const focusRows = (data && nq) ? data.detail.filter(d => (d.designer || "").toLowerCase().includes(nq) || (d.contractor || "").toLowerCase().includes(nq)) : null;
+  const personStats = (rows) => {
+    const s = { orders: rows.length, panels: 0, onTime: 0, late: 0, noTarget: 0, totalLate: 0, maxLate: 0, s2: 0, s5: 0 };
+    rows.forEach(d => {
+      s.panels += d.panels || 0;
+      if (d.status === "On time") s.onTime++;
+      else if (d.status === "Late") { s.late++; const v = +d.lateDays || 0; s.totalLate += v; if (v > s.maxLate) s.maxLate = v; }
+      else s.noTarget++;
+      if (d.s2Late) s.s2++;
+      if (d.s5Late) s.s5++;
+    });
+    s.onTimePct = (s.onTime + s.late) ? Math.round(s.onTime / (s.onTime + s.late) * 100) : null;
+    s.avgLate = s.late ? Math.round(s.totalLate / s.late * 10) / 10 : 0;
+    return s;
+  };
+
+  // a person panel: name, panel bar, and on-time/late split bar
+  const PeopleCard = ({ title, who, people, unitNote }) => (
+    <div className="card">
+      <div className="rep-h">{title}</div>
+      {people.length === 0 ? <div className="empty">No completed work in this range.</div> :
+        people.map(p => {
+          const done = p.onTime + p.late;
+          const onPct = done ? Math.round(p.onTime / done * 100) : null;
+          return (
+            <div key={p.name} className="person">
+              <div className="person-top">
+                <span className="person-name">{p.name}</span>
+                <span className="person-meta">{p.panels} panels · {p.orders} {p.orders === 1 ? "order" : "orders"}</span>
+              </div>
+              <div className="bar"><div className="bar-fill" style={{ width: (p.panels / maxPanels * 100) + "%" }} /></div>
+              <div className="person-timing">
+                {done > 0 ? <>
+                  <div className="split" title={`${p.onTime} on time, ${p.late} late`}>
+                    <div className="split-on" style={{ width: onPct + "%" }} />
+                    <div className="split-late" style={{ width: (100 - onPct) + "%" }} />
+                  </div>
+                  <span className={"timing-tag " + (onPct === 100 ? "good" : onPct >= 70 ? "ok" : "bad")}>
+                    {onPct}% on time
+                  </span>
+                  {p.late > 0 && <span className="late-note">{p.late} late · avg {p.avgLateDays}d</span>}
+                </> : <span className="hint">No delivery date set — on-time not measured</span>}
+              </div>
+            </div>
+          );
+        })}
+      <div className="hint" style={{ marginTop: 4 }}>{unitNote}</div>
+    </div>
+  );
+
+  // stage speed bars
+  const stageRows = [
+    ["Stage 02 · Cutting", st.avgS2], ["Stage 03 · Fabrication", st.avgS3],
+    ["Stage 04 · Dispatch to P.C.", st.avgS4], ["Stage 05 · Assembly", st.avgS5]
+  ];
+  const maxStage = Math.max(1, ...stageRows.map(r => r[1] || 0));
 
   return (
     <div className="view">
       <h2 className="title">Reports</h2>
-      <div className="handler">Covers completed (dispatched) work. “Late” compares the actual dispatch date against the Stage&nbsp;03 delivery date.</div>
+      <div className="handler">A snapshot of <b>finished work</b> (orders that have been dispatched) for the dates you pick below. “Late” means it shipped after the promised delivery date set in Stage&nbsp;03.</div>
 
       <div className="toolbar no-print" style={{ flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -744,77 +818,148 @@ function Reports() {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button className="act" onClick={exportExcel}>⬇ Excel</button>
-          <button className="ghost" onClick={() => window.print()}>🖨 PDF / Print</button>
+          <button className="ghost" onClick={() => { setShowDetail(true); setTimeout(() => window.print(), 150); }}>🖨 PDF / Print</button>
         </div>
       </div>
 
-      <div className="print-only" style={{ marginBottom: 8 }}>
-        <strong>NK TECHNO CRAFT INDIA PVT. LTD. — Production Reports</strong><br />
-        <span className="hint">Range: {rangeLabel} · Generated {new Date().toLocaleString()}</span>
+      <div className="toolbar no-print" style={{ gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <label style={{ display: "inline" }}>🔍 Search a designer or operator</label>
+          <input list="rep-names" value={q} onChange={e => setQ(e.target.value)} placeholder="type a name…" style={{ width: 240, display: "inline-block", background: "#fff" }} />
+          <datalist id="rep-names">{personNames.map(n => <option key={n} value={n} />)}</datalist>
+          {q && <button className="ghost" onClick={() => setQ("")}>✕ Clear</button>}
+        </div>
       </div>
+
+      <div className="rep-range">Showing: <b>{rangeLabel}</b>{nq ? <> · filtered to “<b>{q}</b>”</> : null}</div>
 
       {loading && <div className="empty">Loading…</div>}
 
-      {data && data.company && !loading && <>
-        {/* 5 · Company total */}
-        <div className="card" style={{ borderTop: "4px solid var(--accent)" }}>
-          <strong>5 · Whole Company — NK Techno Craft</strong>
-          <div className="kpis">
-            <div className="kpi"><div className="kpi-n">{c.orders}</div><div className="kpi-l">Orders done</div></div>
-            <div className="kpi"><div className="kpi-n">{c.panels}</div><div className="kpi-l">Panels done</div></div>
-            <div className="kpi"><div className="kpi-n" style={{ color: "#1e8e3e" }}>{c.onTime}</div><div className="kpi-l">On time</div></div>
-            <div className="kpi"><div className="kpi-n" style={{ color: "#d93025" }}>{c.late}</div><div className="kpi-l">Late</div></div>
-            <div className="kpi"><div className="kpi-n">{pct(c.onTimePct)}</div><div className="kpi-l">On-time rate</div></div>
-            <div className="kpi"><div className="kpi-n">{c.avgLateDays}</div><div className="kpi-l">Avg late (days)</div></div>
-            <div className="kpi"><div className="kpi-n">{c.maxLateDays}</div><div className="kpi-l">Worst late (days)</div></div>
-            <div className="kpi"><div className="kpi-n" style={{ color: c.s2Over3 ? "#d93025" : undefined }}>{c.s2Over3 ?? 0}</div><div className="kpi-l">Stage 02 &gt; 3 days</div></div>
-            <div className="kpi"><div className="kpi-n" style={{ color: c.s5Over3 ? "#d93025" : undefined }}>{c.s5Over3 ?? 0}</div><div className="kpi-l">Stage 05 &gt; 3 days</div></div>
-            <div className="kpi"><div className="kpi-n">{c.totalKgs.toLocaleString()}</div><div className="kpi-l">Dispatch KGS</div></div>
+      {/* focused single-person report */}
+      {data && !loading && focusRows && (() => {
+        if (!focusRows.length) return <div className="empty">No finished orders for “{q}” in this range. Check the spelling, widen the dates, or pick a name from the list.</div>;
+        const s = personStats(focusRows);
+        const asDesigner = focusRows.some(d => (d.designer || "").toLowerCase().includes(nq));
+        const asContractor = focusRows.some(d => (d.contractor || "").toLowerCase().includes(nq));
+        return <>
+          <div className="rep-hero">
+            <div className="hero-item">
+              <div className="hero-n">{s.orders}</div><div className="hero-l">Orders finished</div>
+              <div className="hero-sub">{s.panels} panels</div>
+            </div>
+            <div className="hero-divider" />
+            <div className="hero-item">
+              <div className="hero-n" style={{ color: s.onTimePct === null ? "var(--muted)" : s.onTimePct >= 70 ? "#1e8e3e" : "#d93025" }}>{pct(s.onTimePct)}</div>
+              <div className="hero-l">Delivered on time</div>
+              <div className="hero-sub"><span style={{ color: "#1e8e3e" }}>{s.onTime} on time</span> · <span style={{ color: "#d93025" }}>{s.late} late</span>{s.noTarget ? ` · ${s.noTarget} no date` : ""}</div>
+            </div>
+            <div className="hero-divider" />
+            <div className="hero-item">
+              <div className="hero-n">{s.late ? s.avgLate + "d" : "0d"}</div><div className="hero-l">Avg delay when late</div>
+              <div className="hero-sub">{s.late ? `worst ${s.maxLate} days` : "nothing late 🎉"}</div>
+            </div>
           </div>
-          {c.noTarget > 0 && <div className="hint" style={{ marginTop: 6 }}>{c.noTarget} order(s) had no Stage 03 delivery date and are excluded from on-time/late.</div>}
-        </div>
 
-        <div className="grid2">
-          <div className="card"><strong>1 · Work Done — by Designer</strong>
-            <Tbl head={["Designer", "Orders", "Panels"]} rows={data.designerWork.map(r => [r.name, r.orders, r.panels])} /></div>
-          <div className="card"><strong>2 · Work Done — by Contractor</strong>
-            <Tbl head={["Contractor (Fabricator)", "Orders", "Panels"]} rows={data.contractorWork.map(r => [r.name, r.orders, r.panels])} /></div>
-        </div>
-
-        <div className="grid2">
-          <div className="card"><strong>3 · Designer — On-time vs Late</strong>
-            <Tbl head={["Designer", "Orders", "On time", "Late", "On-time %", "Avg late", "Max late"]}
-              rows={data.designerTiming.map(r => [r.name, r.orders, r.onTime, r.late, pct(r.onTimePct), r.avgLateDays, r.maxLateDays])} /></div>
-          <div className="card"><strong>4 · Contractor — On-time vs Late</strong>
-            <Tbl head={["Contractor", "Orders", "On time", "Late", "On-time %", "Avg late", "Max late"]}
-              rows={data.contractorTiming.map(r => [r.name, r.orders, r.onTime, r.late, pct(r.onTimePct), r.avgLateDays, r.maxLateDays])} /></div>
-        </div>
-
-        {data.stageTiming && <div className="card"><strong>Stage timing — average days each stage holds the work</strong>
-          <div className="kpis">
-            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS2 ?? "—"}</div><div className="kpi-l">Stage 02 (Cutting)</div></div>
-            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS3 ?? "—"}</div><div className="kpi-l">Stage 03 (Fabrication)</div></div>
-            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS4 ?? "—"}</div><div className="kpi-l">Stage 04 (Dispatch P.C.)</div></div>
-            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgS5 ?? "—"}</div><div className="kpi-l">Stage 05 (Assembly)</div></div>
-            <div className="kpi"><div className="kpi-n">{data.stageTiming.avgLead ?? "—"}</div><div className="kpi-l">Total lead time</div></div>
+          <div className={"rep-sla " + ((s.s2 || s.s5) ? "bad" : "good")}>
+            {(s.s2 || s.s5)
+              ? <><b>⚠ 3-day rule broken</b> on {s.s2 ? `${s.s2} order(s) in Cutting (Stage 02)` : ""}{s.s2 && s.s5 ? " and " : ""}{s.s5 ? `${s.s5} order(s) in Assembly (Stage 05)` : ""}.</>
+              : <><b>✓ 3-day rule respected</b> — no order over 3 days in Cutting or Assembly.</>}
           </div>
-          <div className="hint" style={{ marginTop: 6 }}>Red figures in the table below = more than {data.stageTiming.slaDays} days in Stage 02 or Stage 05.</div>
-        </div>}
 
-        <div className="card"><strong>Order detail ({data.detail.length})</strong>
-          <Tbl
-            head={["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery", "Completed", "Late days", "Status", "S2 days", "S5 days", "Lead"]}
+          <div className="card">
+            <div className="rep-h">
+              Details for “{q}”
+              <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>
+                {asDesigner && asContractor ? "appears as Designer & Operator" : asDesigner ? "as Designer" : "as Operator/Contractor"}
+              </span>
+            </div>
+            <Tbl
+              head={["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery", "Completed", "Late days", "Status", "Cutting (S2)", "Assembly (S5)", "Total days"]}
+              aligns={["", "", "", "", "", "num", "", "", "num", "", "num", "num", "num"]}
+              rows={focusRows.map(d => [
+                d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate || "—", d.completedDate,
+                d.lateDays === "" ? "—" : d.lateDays,
+                <span key="s" style={{ color: d.status === "Late" ? "#d93025" : d.status === "On time" ? "#1e8e3e" : "var(--muted)", fontWeight: 600 }}>{d.status}</span>,
+                <span key="s2" style={{ color: d.s2Late ? "#d93025" : undefined, fontWeight: d.s2Late ? 700 : 400 }}>{d.s2Days === "" ? "—" : d.s2Days + "d"}</span>,
+                <span key="s5" style={{ color: d.s5Late ? "#d93025" : undefined, fontWeight: d.s5Late ? 700 : 400 }}>{d.s5Days === "" ? "—" : d.s5Days + "d"}</span>,
+                d.leadDays === "" ? "—" : d.leadDays + "d"
+              ])} />
+            <div className="hint" style={{ marginTop: 6 }}>Showing finished (dispatched) orders only. Clear the search to see the full company report.</div>
+          </div>
+        </>;
+      })()}
+
+      {data && data.company && !loading && !focusRows && (c.orders === 0 ? (
+        <div className="empty">No finished work in this date range yet. Try “All time”, or pick a wider range.</div>
+      ) : <>
+        {/* Company at a glance */}
+        <div className="rep-hero">
+          <div className="hero-item">
+            <div className="hero-n">{c.orders}</div>
+            <div className="hero-l">Orders finished</div>
+            <div className="hero-sub">{c.panels} panels · {c.totalKgs.toLocaleString()} kg shipped</div>
+          </div>
+          <div className="hero-divider" />
+          <div className="hero-item">
+            <div className="hero-n" style={{ color: c.onTimePct === null ? "var(--muted)" : c.onTimePct >= 70 ? "#1e8e3e" : "#d93025" }}>{pct(c.onTimePct)}</div>
+            <div className="hero-l">Delivered on time</div>
+            <div className="hero-sub"><span style={{ color: "#1e8e3e" }}>{c.onTime} on time</span> · <span style={{ color: "#d93025" }}>{c.late} late</span>{c.noTarget ? ` · ${c.noTarget} no date` : ""}</div>
+          </div>
+          <div className="hero-divider" />
+          <div className="hero-item">
+            <div className="hero-n">{c.late ? c.avgLateDays + "d" : "0d"}</div>
+            <div className="hero-l">Avg delay when late</div>
+            <div className="hero-sub">{c.late ? `worst was ${c.maxLateDays} days` : "nothing late 🎉"}</div>
+          </div>
+        </div>
+
+        {/* 3-day rule callout */}
+        <div className={"rep-sla " + ((c.s2Over3 || c.s5Over3) ? "bad" : "good")}>
+          {(c.s2Over3 || c.s5Over3) ? (
+            <><b>⚠ The 3-day rule was broken.</b> Cutting (Stage 02) took over 3 days on <b>{c.s2Over3}</b> order{c.s2Over3 === 1 ? "" : "s"}, and Assembly (Stage 05) on <b>{c.s5Over3}</b> order{c.s5Over3 === 1 ? "" : "s"}. See the red rows in “All finished orders”.</>
+          ) : (
+            <><b>✓ The 3-day rule was respected.</b> No order spent more than 3 days in Cutting (Stage 02) or Assembly (Stage 05).</>
+          )}
+        </div>
+
+        {/* By designer / by contractor */}
+        <div className="grid2">
+          <PeopleCard title="👤 By Designer" people={designers} unitNote="Bar = panels finished. Coloured strip = on-time (green) vs late (red)." />
+          <PeopleCard title="🔧 By Contractor" people={contractors} unitNote="Bar = panels finished. Coloured strip = on-time (green) vs late (red)." />
+        </div>
+
+        {/* Stage speed */}
+        <div className="card">
+          <div className="rep-h">⏱ How long each stage holds the work (average days)</div>
+          {stageRows.map(([label, v]) => (
+            <div key={label} className="stage-row">
+              <span className="stage-label">{label}</span>
+              <div className="bar"><div className="bar-fill" style={{ width: ((v || 0) / maxStage * 100) + "%", background: (label.startsWith("Stage 02") || label.startsWith("Stage 05")) && v > st.slaDays ? "#d93025" : undefined }} /></div>
+              <span className="stage-val">{v == null ? "—" : v + "d"}</span>
+            </div>
+          ))}
+          <div className="hint" style={{ marginTop: 8 }}>Average time from first cut to dispatch: <b>{st.avgLead == null ? "—" : st.avgLead + " days"}</b>. Bars turn red if Stage 02 or 05 averaged more than {st.slaDays} days.</div>
+        </div>
+
+        {/* drill-down: all orders */}
+        <div className="card">
+          <div className="rep-h" style={{ cursor: "pointer", display: "flex", justifyContent: "space-between" }} onClick={() => setShowDetail(s => !s)}>
+            <span>📋 All finished orders ({data.detail.length})</span>
+            <span className="hint no-print">{showDetail ? "▾ hide" : "▸ show"}</span>
+          </div>
+          {showDetail && <Tbl
+            head={["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery", "Completed", "Late days", "Status", "Cutting (S2)", "Assembly (S5)", "Total days"]}
             aligns={["", "", "", "", "", "num", "", "", "num", "", "num", "num", "num"]}
             rows={data.detail.map(d => [
               d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate || "—", d.completedDate,
               d.lateDays === "" ? "—" : d.lateDays,
               <span key="s" style={{ color: d.status === "Late" ? "#d93025" : d.status === "On time" ? "#1e8e3e" : "var(--muted)", fontWeight: 600 }}>{d.status}</span>,
-              <span key="s2" style={{ color: d.s2Late ? "#d93025" : undefined, fontWeight: d.s2Late ? 700 : 400 }}>{d.s2Days === "" ? "—" : d.s2Days}</span>,
-              <span key="s5" style={{ color: d.s5Late ? "#d93025" : undefined, fontWeight: d.s5Late ? 700 : 400 }}>{d.s5Days === "" ? "—" : d.s5Days}</span>,
-              d.leadDays === "" ? "—" : d.leadDays
-            ])} />
+              <span key="s2" style={{ color: d.s2Late ? "#d93025" : undefined, fontWeight: d.s2Late ? 700 : 400 }}>{d.s2Days === "" ? "—" : d.s2Days + "d"}</span>,
+              <span key="s5" style={{ color: d.s5Late ? "#d93025" : undefined, fontWeight: d.s5Late ? 700 : 400 }}>{d.s5Days === "" ? "—" : d.s5Days + "d"}</span>,
+              d.leadDays === "" ? "—" : d.leadDays + "d"
+            ])} />}
         </div>
-      </>}
+      </>)}
     </div>
   );
 }
