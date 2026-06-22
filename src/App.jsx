@@ -19,7 +19,8 @@ const STATUS = { 2: ["Cutting", "st-cut"], 3: ["Fabrication", "st-fab"], 4: ["To
 const Badge = ({ stage }) => { const x = STATUS[stage] || ["New", "st-new"]; return <span className={"status " + x[1]}>{x[0]}</span>; };
 const accLine = (o) => {
   const a = [];
-  if (o.acc.point) a.push("POINT LOCK"); if (o.acc.p3) a.push("3 POINT LOCK");
+  if (o.acc.point) a.push("POINT LOCK" + (o.acc.pointNote ? ` (${o.acc.pointNote})` : ""));
+  if (o.acc.p3) a.push("3 POINT LOCK" + (o.acc.p3Note ? ` (${o.acc.p3Note})` : ""));
   if (o.acc.pu) a.push("PU GASKETING"); if (o.acc.patti) a.push("PATTI GASKETING");
   if (o.acc.other) a.push(o.acc.other);
   return a.join(", ") || "-";
@@ -43,6 +44,17 @@ const daysInCurrentStage = (o) => {
 };
 const isOverdue = (o) => SLA_STAGES.includes(o.stage) && (daysInCurrentStage(o) ?? 0) > SLA_DAYS;
 
+// client-side on-time/late for a completed (dispatched) order
+const orderCompletion = (o) => o.stage === 6 ? new Date(o.dispatchedAt || o.updatedAt) : null;
+const orderLateDays = (o) => {
+  const c = orderCompletion(o); const ds = o.s3 && o.s3.deliveryDate;
+  if (!c || !ds) return null;
+  const d = new Date(ds + "T00:00:00"); if (isNaN(d)) return null;
+  const cc = new Date(c.getFullYear(), c.getMonth(), c.getDate());
+  const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.round((cc - dd) / 86400000);
+};
+
 /* collapsible section (collapsed by default) */
 function Section({ id, label, color, count, openMap, setOpen, children }) {
   const open = !!openMap[id];
@@ -54,7 +66,7 @@ function Section({ id, label, color, count, openMap, setOpen, children }) {
         {label} <span className="pill">{count}</span>
         <small className="hint" style={{ fontWeight: "normal" }}>{open ? "(click to hide)" : "(click to show)"}</small>
       </div>
-      {open && <div>{children}</div>}
+      {open && <div className="sec-body">{children}</div>}
     </>
   );
 }
@@ -173,8 +185,9 @@ function Challan({ o, type, patch, meta }) {
             <td className="challan-yellow"><b>D.C. NO.:</b> <Inp path="s4.dcno" val={s.dcno || String(o.wo)} /></td></tr>
         <tr><td className="challan-blue"><b>WO NO.:</b> {woNum(o)}{boxTag(o)}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
         <tr><td colSpan={2} className="challan-blue"><b>CUSTOMER NAME:</b> {o.party}</td></tr>
+        <tr><td className="challan-blue"><b>GSTIN:</b> {o.gstNo || "-"}</td><td className="challan-blue"><b>GST:</b> {o.gstPct ?? 0}%</td></tr>
         <tr><td className="challan-blue"><b>CONTRACTOR:</b> {o.s3.fabricator || "-"}</td><td className="challan-blue"><b>DESIGNER:</b> {o.designer}</td></tr>
-        <tr><td colSpan={2} className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s4.weight" val={s.weight} type="number" /> KGS</td></tr>
+        <tr><td colSpan={2} className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s4.weight" val={s.weight} type="number" /> {o.weightUnit || "KGS"}</td></tr>
         <tr className="head"><td colSpan={2}>COLOR CODE OF PANEL</td></tr>
         <tr><td className="challan-blue">BODY</td><td className="challan-blue">{o.cBody || "-"}</td></tr>
         <tr><td className="challan-blue">MOUNTING PLATE</td><td className="challan-blue">{o.cMP || "-"}</td></tr>
@@ -182,7 +195,7 @@ function Challan({ o, type, patch, meta }) {
         <tr className="head"><td colSpan={2}>POWDER COATING TYPE</td></tr>
         <tr><td colSpan={2} className="challan-blue">{ck(o.pcType === "Single Coat", "SINGLE COAT")} &nbsp;&nbsp;&nbsp; {ck(o.pcType === "Double Coat", "DOUBLE COAT")}</td></tr>
         <tr className="head"><td colSpan={2}>ACCESSORIES</td></tr>
-        <tr><td colSpan={2} className="challan-blue">{ck(o.acc.point, "POINT LOCK")} &nbsp; {ck(o.acc.p3, "3 POINT LOCK")} &nbsp; {ck(o.acc.pu, "PU GASKETING")} &nbsp; {ck(o.acc.patti, "PATTI GASKETING")} &nbsp; ANY OTHER: {o.acc.other || "-"}</td></tr>
+        <tr><td colSpan={2} className="challan-blue">{ck(o.acc.point, "POINT LOCK")}{o.acc.pointNote ? ` (${o.acc.pointNote})` : ""} &nbsp; {ck(o.acc.p3, "3 POINT LOCK")}{o.acc.p3Note ? ` (${o.acc.p3Note})` : ""} &nbsp; {ck(o.acc.pu, "PU GASKETING")} &nbsp; {ck(o.acc.patti, "PATTI GASKETING")} &nbsp; ANY OTHER: {o.acc.other || "-"}</td></tr>
         <tr className="head"><td colSpan={2}>POWDER COATING LOCATION</td></tr>
         <tr><td colSpan={2} className="challan-yellow">{pcLocations.map(l => {
           const on = s.location === l;
@@ -200,8 +213,9 @@ function Challan({ o, type, patch, meta }) {
         <tr><td className="challan-blue"><b>DATE:</b> {o.date}</td><td className="challan-blue"><b>D.C. NO.:</b> {o.wo}</td></tr>
         <tr><td className="challan-blue"><b>WO NO.:</b> {woNum(o)}{boxTag(o)}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
         <tr><td colSpan={2} className="challan-blue"><b>CUSTOMER NAME:</b> {o.party}</td></tr>
+        <tr><td className="challan-blue"><b>GSTIN:</b> {o.gstNo || "-"}</td><td className="challan-blue"><b>GST:</b> {o.gstPct ?? 0}%</td></tr>
         <tr><td className="challan-blue"><b>CONTRACTOR:</b> {o.s3.fabricator || "-"}</td><td className="challan-blue"><b>DESIGNER:</b> {o.designer}</td></tr>
-        <tr><td className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s5.weight" val={s.weight} type="number" /> KGS</td>
+        <tr><td className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s5.weight" val={s.weight} type="number" /> {o.weightUnit || "KGS"}</td>
             <td className="challan-yellow"><b>GAADI NO.:</b> <Inp path="s5.gaadi" val={s.gaadi} /></td></tr>
         <tr className="head"><td colSpan={2}>COLOR CODE OF PANEL</td></tr>
         <tr><td className="challan-blue">BODY</td><td className="challan-blue">{o.cBody || "-"}</td></tr>
@@ -244,7 +258,8 @@ function EditOrderModal({ order, meta, onClose, onSaved }) {
     panelType: order.panelType || "", pono: order.pono || "", qty: order.qty || 0,
     desc: order.desc || "", parts: order.parts || 0, custwo: order.custwo || "",
     pcType: order.pcType || "Single Coat", cBody: order.cBody || "", cMP: order.cMP || "",
-    cBase: order.cBase || "", rate: order.rate || 0, remarks: order.remarks || ""
+    cBase: order.cBase || "", rate: order.rate || 0, remarks: order.remarks || "",
+    gstNo: order.gstNo || "", gstPct: order.gstPct ?? 18, weightUnit: order.weightUnit || "KGS"
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -257,7 +272,8 @@ function EditOrderModal({ order, meta, onClose, onSaved }) {
         date: f.date, designer: f.designer, party: f.party.trim(), panelType: f.panelType,
         pono: f.pono, qty: Number(f.qty) || 0, desc: f.desc, parts: Number(f.parts) || 0,
         custwo: f.custwo, pcType: f.pcType, cBody: f.cBody, cMP: f.cMP, cBase: f.cBase,
-        rate: Number(f.rate) || 0, remarks: f.remarks
+        rate: Number(f.rate) || 0, remarks: f.remarks,
+        gstNo: f.gstNo, gstPct: Number(f.gstPct) || 0, weightUnit: f.weightUnit
       });
       onSaved();
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -293,6 +309,15 @@ function EditOrderModal({ order, meta, onClose, onSaved }) {
           <div><label>Mounting Plate Colour</label><input value={f.cMP} onChange={e => set("cMP", e.target.value)} /></div>
           <div><label>Base Colour</label><input value={f.cBase} onChange={e => set("cBase", e.target.value)} /></div>
           <div><label>Rate</label><input type="text" inputMode="decimal" value={f.rate} onChange={e => set("rate", e.target.value)} /></div>
+          <div><label>GST No. (GSTIN)</label><input value={f.gstNo} maxLength={15} onChange={e => set("gstNo", e.target.value.toUpperCase())} /></div>
+          <div><label>GST %</label>
+            <select value={f.gstPct} onChange={e => set("gstPct", e.target.value)}>
+              {[0, 5, 12, 18, 28].map(p => <option key={p} value={p}>{p}%</option>)}
+            </select></div>
+          <div><label>Weight measured in</label>
+            <select value={f.weightUnit} onChange={e => set("weightUnit", e.target.value)}>
+              <option value="KGS">KGS</option><option value="Nos">Nos</option>
+            </select></div>
         </div>
         <label>Remarks</label><input value={f.remarks} onChange={e => set("remarks", e.target.value)} />
         {err && <div style={{ color: "#d93025", marginTop: 8 }}>{err}</div>}
@@ -337,9 +362,10 @@ function Dashboard({ orders, isAdmin, meta, onEdit, onDelete }) {
 }
 
 function General({ meta, orders, refresh }) {
-  const [nd, setNd] = useState(""); const [nc, setNc] = useState("");
+  const [nd, setNd] = useState(""); const [nc, setNc] = useState(""); const [np, setNp] = useState("");
   const addD = async () => { if (!nd.trim()) return; try { await api.addDesigner(nd); setNd(""); refresh(); } catch (e) { alert(e.message); } };
   const addC = async () => { if (!nc.trim()) return; try { await api.addContractor(nc); setNc(""); refresh(); } catch (e) { alert(e.message); } };
+  const addP = async () => { if (!np.trim()) return; try { await api.addPanelType(np); setNp(""); refresh(); } catch (e) { alert(e.message); } };
   const delD = async (n) => {
     const used = orders.filter(o => o.designer === n).length;
     if (!confirm(used ? `"${n}" is used on ${used} order(s). Remove from future dropdowns?` : `Delete designer "${n}"?`)) return;
@@ -350,6 +376,12 @@ function General({ meta, orders, refresh }) {
     if (!confirm(used ? `"${n}" is assigned on ${used} order(s). Remove from future dropdowns?` : `Delete contractor "${n}"?`)) return;
     await api.delContractor(n); refresh();
   };
+  const delP = async (n) => {
+    const used = orders.filter(o => (o.panelType || "").split(",").map(s => s.trim()).includes(n)).length;
+    if (!confirm(used ? `"${n}" is used on ${used} order(s). Remove from future options?` : `Delete panel type "${n}"?`)) return;
+    await api.delPanelType(n); refresh();
+  };
+  const panelTypes = meta.panelTypes || [];
   return (
     <div className="view">
       <h2 className="title">General Information</h2>
@@ -377,6 +409,20 @@ function General({ meta, orders, refresh }) {
           </div>
         </div>
       </div>
+      <div className="grid2" style={{ marginTop: 14 }}>
+        <div className="card">
+          <div className="toolbar"><strong>Total Panel Types</strong><span className="pill">{panelTypes.length} types</span></div>
+          <table><thead><tr><th style={{ width: 40 }}>#</th><th>Panel Type</th><th style={{ width: 60 }}></th></tr></thead>
+            <tbody>{panelTypes.map((p, i) =>
+              <tr key={p}><td>{i + 1}</td><td>{p}</td><td style={{ textAlign: "center" }}><button className="danger" onClick={() => delP(p)}>Del</button></td></tr>)}
+            </tbody></table>
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <input placeholder="New panel type (e.g. HT PANEL)" value={np} onChange={e => setNp(e.target.value)} onKeyDown={e => e.key === "Enter" && addP()} />
+            <button className="act" style={{ whiteSpace: "nowrap" }} onClick={addP}>＋ Add</button>
+          </div>
+          <div className="hint" style={{ marginTop: 6 }}>These appear as checkboxes on Stage 01 (an order can have several panel types).</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -384,8 +430,9 @@ function General({ meta, orders, refresh }) {
 const EMPTY_FORM = {
   date: new Date().toISOString().slice(0, 10), designer: "", party: "", panelType: "",
   pono: "", qty: "", desc: "", parts: "", custwo: "", pcType: "Single Coat",
-  cBody: "", cMP: "", cBase: "", acc: { point: false, p3: false, pu: false, patti: false, other: "" },
-  rate: "", rIncl: true, rExtra: false, remarks: ""
+  cBody: "", cMP: "", cBase: "", acc: { point: false, p3: false, pu: false, patti: false, other: "", pointNote: "", p3Note: "" },
+  rate: "", rIncl: true, rExtra: false, remarks: "",
+  gstNo: "", gstPct: "18", weightUnit: "KGS"
 };
 function StageOne({ meta, nextWO, onCreated }) {
   const [f, setF] = useState({ ...EMPTY_FORM, designer: meta.designers[0] || "" });
@@ -412,7 +459,20 @@ function StageOne({ meta, nextWO, onCreated }) {
             <label>Designer Name</label>
             <select value={f.designer} onChange={e => set("designer", e.target.value)}>{meta.designers.map(d => <option key={d}>{d}</option>)}</select>
             <label>Party Name</label><input value={f.party} onChange={e => set("party", e.target.value)} />
-            <label>Panel Type</label><input value={f.panelType} placeholder="HT PANEL / ENCLOSURE BOX" onChange={e => set("panelType", e.target.value)} />
+            <label>Panel Type <small className="hint">(tick one or more)</small></label>
+            {(() => {
+              const types = meta.panelTypes || [];
+              const sel = f.panelType ? f.panelType.split(",").map(s => s.trim()).filter(Boolean) : [];
+              const toggle = (name, on) => {
+                const arr = sel.filter(x => x !== name);
+                if (on) arr.push(name);
+                set("panelType", arr.join(", "));
+              };
+              if (!types.length) return <div className="hint" style={{ margin: "4px 0 10px" }}>No panel types yet — add them in <b>General Info</b>.</div>;
+              return <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 16px", margin: "4px 0 10px" }}>
+                {types.map(t => <label key={t} className="chk" style={{ minWidth: 150 }}><input type="checkbox" checked={sel.includes(t)} onChange={e => toggle(t, e.target.checked)} /> {t}</label>)}
+              </div>;
+            })()}
             <label>P.O. No. (optional)</label><input value={f.pono} onChange={e => set("pono", e.target.value)} />
             <label>Qty</label><input type="number" value={f.qty} onChange={e => set("qty", e.target.value)} />
             <label>Description (size)</label><input value={f.desc} placeholder="3000X2000X550" onChange={e => set("desc", e.target.value)} />
@@ -430,14 +490,36 @@ function StageOne({ meta, nextWO, onCreated }) {
               <label>Base / Stand</label><input value={f.cBase} placeholder="BLACK" onChange={e => set("cBase", e.target.value)} />
             </fieldset>
             <fieldset><legend>Accessories</legend>
-              <label className="chk"><input type="checkbox" checked={f.acc.point} onChange={e => setAcc("point", e.target.checked)} /> Point Lock</label>
-              <label className="chk"><input type="checkbox" checked={f.acc.p3} onChange={e => setAcc("p3", e.target.checked)} /> 3 Point Lock</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <label className="chk" style={{ minWidth: 130, margin: 0 }}><input type="checkbox" checked={f.acc.point} onChange={e => setAcc("point", e.target.checked)} /> Point Lock</label>
+                <input value={f.acc.pointNote} placeholder="write here…" onChange={e => setAcc("pointNote", e.target.value)} style={{ flex: 1, margin: 0 }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <label className="chk" style={{ minWidth: 130, margin: 0 }}><input type="checkbox" checked={f.acc.p3} onChange={e => setAcc("p3", e.target.checked)} /> 3 Point Lock</label>
+                <input value={f.acc.p3Note} placeholder="write here…" onChange={e => setAcc("p3Note", e.target.value)} style={{ flex: 1, margin: 0 }} />
+              </div>
               <label className="chk"><input type="checkbox" checked={f.acc.pu} onChange={e => setAcc("pu", e.target.checked)} /> PU Gasketing</label>
               <label className="chk"><input type="checkbox" checked={f.acc.patti} onChange={e => setAcc("patti", e.target.checked)} /> Patti Gasketing</label>
               <label>Any Other</label><input value={f.acc.other} onChange={e => setAcc("other", e.target.value)} />
             </fieldset>
-            <fieldset><legend>Rate</legend>
-              <label>Rate per KGS</label><input type="number" value={f.rate} placeholder="125" onChange={e => set("rate", e.target.value)} />
+            <fieldset><legend>GST Details</legend>
+              <label>GST No. (GSTIN)</label><input value={f.gstNo} placeholder="24ABCDE1234F1Z5" maxLength={15} onChange={e => set("gstNo", e.target.value.toUpperCase())} />
+              <label>GST %</label>
+              <select value={f.gstPct} onChange={e => set("gstPct", e.target.value)}>
+                <option value="0">0% (Exempt)</option>
+                <option value="5">5%</option>
+                <option value="12">12%</option>
+                <option value="18">18%</option>
+                <option value="28">28%</option>
+              </select>
+            </fieldset>
+            <fieldset><legend>Rate &amp; Weight</legend>
+              <label>Rate per {f.weightUnit === "Nos" ? "Unit" : "KGS"}</label><input type="number" value={f.rate} placeholder="125" onChange={e => set("rate", e.target.value)} />
+              <label>Weight measured in</label>
+              <div style={{ display: "flex", gap: 16, margin: "2px 0 8px" }}>
+                <label className="chk"><input type="radio" name="wunit" checked={f.weightUnit === "KGS"} onChange={() => set("weightUnit", "KGS")} /> KGS</label>
+                <label className="chk"><input type="radio" name="wunit" checked={f.weightUnit === "Nos"} onChange={() => set("weightUnit", "Nos")} /> Nos</label>
+              </div>
               <label className="chk"><input type="checkbox" checked={f.rIncl} onChange={e => set("rIncl", e.target.checked)} /> Including Accessories</label>
               <label className="chk"><input type="checkbox" checked={f.rExtra} onChange={e => set("rExtra", e.target.checked)} /> Extra</label>
             </fieldset>
@@ -453,6 +535,27 @@ function StageOne({ meta, nextWO, onCreated }) {
   );
 }
 
+/* read-only view of everything entered in Stage 01 — shown in every later stage */
+function OrderInfo({ o }) {
+  const rows = [
+    ["Designer", o.designer], ["Party", o.party], ["Panel Type", o.panelType || "-"],
+    ["Size", o.desc || "-"], ["Qty", o.qty], ["Parts (Bhag)", o.parts],
+    ["P.O. No.", o.pono || "-"], ["Customer WO", o.custwo || "-"],
+    ["Powder Coating", o.pcType], ["Body Colour", o.cBody || "-"],
+    ["Mounting Plate", o.cMP || "-"], ["Base / Stand", o.cBase || "-"],
+    ["Accessories", accLine(o)],
+    ["Rate", `${o.rate || 0} / ${o.weightUnit === "Nos" ? "Unit" : "KGS"}${o.rIncl ? " · incl. acc." : ""}${o.rExtra ? " · extra" : ""}`],
+    ["Weight in", o.weightUnit || "KGS"],
+    ["GST No.", o.gstNo || "-"], ["GST %", (o.gstPct ?? 0) + "%"],
+    ["Remarks", o.remarks || "-"]
+  ];
+  return (
+    <div className="order-info">
+      {rows.map(([k, v]) => <div key={k} className="oi-item"><span className="oi-k">{k}</span><span className="oi-v">{v}</span></div>)}
+    </div>
+  );
+}
+
 /* table-based stages 2 & 3 */
 function TableStage({ title, handler, stageNo, orders, meta, patch, advance, openMap, setOpen, onSplit }) {
   const list = orders.filter(o => o.stage >= stageNo);
@@ -462,35 +565,43 @@ function TableStage({ title, handler, stageNo, orders, meta, patch, advance, ope
     patch(o.wo, which === "ok" ? { [`s${stageNo}.ok`]: checked, [`s${stageNo}.notok`]: checked ? false : o[`s${stageNo}`].notok }
                               : { [`s${stageNo}.notok`]: checked, [`s${stageNo}.ok`]: checked ? false : o[`s${stageNo}`].ok });
 
+  const colCount = stageNo === 3 ? 12 : 9;
   const row = (o) => {
     const s = o["s" + stageNo];
     const locked = o.stage > stageNo;
     const overdue = o.stage === stageNo && isOverdue(o);
+    const infoKey = `info_${o.wo}`;
+    const showInfo = !!openMap[infoKey];
     return (
-      <tr key={o.wo} className={overdue ? "overdue-row" : ""}>
-        <td>WO. NO. – {woNum(o)}{boxTag(o)}{overdue && <span className="od-badge">⚠ {daysInCurrentStage(o)}d</span>}</td>
-        <td className="auto-cell">{o.designer}</td>
-        <td className="auto-cell">{o.date}</td>
-        <td className="auto-cell">{o.party}</td>
-        {stageNo === 3 && <td className="auto-cell">{o.panelType}</td>}
-        <td className="auto-cell">{o.desc}</td>
-        {stageNo === 3 && <td className="auto-cell num">{o.parts}</td>}
-        <td className="auto-cell num">{o.qty}</td>
-        {stageNo === 2 && <td><input defaultValue={s.sheetQty} style={{ width: 90 }} disabled={locked} onBlur={e => patch(o.wo, { "s2.sheetQty": e.target.value })} /></td>}
-        {stageNo === 3 && <td><select defaultValue={s.fabricator} disabled={locked} onChange={e => patch(o.wo, { "s3.fabricator": e.target.value })}>
+      <React.Fragment key={o.wo}>
+      <tr className={overdue ? "overdue-row" : ""}>
+        <td data-label="WO No" style={{ whiteSpace: "nowrap" }}>WO. NO. – {woNum(o)}{boxTag(o)}{overdue && <span className="od-badge">⚠ {daysInCurrentStage(o)}d</span>}
+          <button className="mini b-grey no-print" title="Show full order details" style={{ marginLeft: 6, padding: "1px 7px" }} onClick={() => setOpen(st => ({ ...st, [infoKey]: !st[infoKey] }))}>{showInfo ? "▾" : "ℹ"}</button>
+        </td>
+        <td data-label="Designer" className="auto-cell">{o.designer}</td>
+        <td data-label="Date" className="auto-cell">{o.date}</td>
+        <td data-label="Party" className="auto-cell">{o.party}</td>
+        {stageNo === 3 && <td data-label="Panel Type" className="auto-cell">{o.panelType}</td>}
+        <td data-label="Description" className="auto-cell">{o.desc}</td>
+        {stageNo === 3 && <td data-label="Parts" className="auto-cell num">{o.parts}</td>}
+        <td data-label="Panel Qty" className="auto-cell num">{o.qty}</td>
+        {stageNo === 2 && <td data-label="Sheet Qty"><input defaultValue={s.sheetQty} style={{ width: 90 }} disabled={locked} onBlur={e => patch(o.wo, { "s2.sheetQty": e.target.value })} /></td>}
+        {stageNo === 3 && <td data-label="Fabricator (Team)"><select defaultValue={s.fabricator} disabled={locked} onChange={e => patch(o.wo, { "s3.fabricator": e.target.value })}>
           <option value="">— select —</option>{meta.contractors.map(c => <option key={c}>{c}</option>)}</select></td>}
-        {stageNo === 3 && <td><input type="date" defaultValue={s.deliveryDate} style={{ width: 140 }} disabled={locked} onBlur={e => patch(o.wo, { "s3.deliveryDate": e.target.value })} /></td>}
-        <td style={{ whiteSpace: "nowrap" }}>
+        {stageNo === 3 && <td data-label="Delivery Date"><input type="date" defaultValue={s.deliveryDate} style={{ width: 140 }} disabled={locked} onBlur={e => patch(o.wo, { "s3.deliveryDate": e.target.value })} /></td>}
+        <td data-label="OK / Not-OK" style={{ whiteSpace: "nowrap" }}>
           <label className="chk" style={{ display: "inline-flex", marginRight: 10 }}><input type="checkbox" checked={!!s.ok} disabled={locked} onChange={e => okToggle(o, "ok", e.target.checked)} /> OK</label>
           <label className="chk" style={{ display: "inline-flex" }}><input type="checkbox" checked={!!s.notok} disabled={locked} onChange={e => okToggle(o, "notok", e.target.checked)} /> NOT OK</label>
         </td>
-        <td style={{ whiteSpace: "nowrap" }}>{o.stage === stageNo
+        <td data-label="Action" style={{ whiteSpace: "nowrap" }}>{o.stage === stageNo
           ? <>
               <button className="mini b-green" onClick={() => advance(o.wo, stageNo + 1)}>{stageNo === 2 ? "Send → Fabrication" : "Send → P.C."}</button>
               {o.qty > 1 && <button className="mini b-grey" style={{ marginLeft: 6 }} onClick={() => onSplit(o)}>✂ Split</button>}
             </>
           : <span className="status st-done">Done</span>}</td>
       </tr>
+      {showInfo && <tr className="info-row"><td colSpan={colCount}><OrderInfo o={o} /></td></tr>}
+      </React.Fragment>
     );
   };
   const head = (
@@ -508,10 +619,10 @@ function TableStage({ title, handler, stageNo, orders, meta, patch, advance, ope
       <div className="handler">{handler}</div>
       {(!inc.length && !done.length) ? <div className="empty">No orders at this stage yet.</div> : <>
         <Section id={`s${stageNo}_inc`} label="⏳ Incomplete" color="#e08e0b" count={inc.length} openMap={openMap} setOpen={setOpen}>
-          {inc.length ? <table>{head}<tbody>{inc.map(row)}</tbody></table> : <div className="empty">Nothing pending.</div>}
+          {inc.length ? <table className="stage-table">{head}<tbody>{inc.map(row)}</tbody></table> : <div className="empty">Nothing pending.</div>}
         </Section>
         <Section id={`s${stageNo}_done`} label="✔ Completed" color="#1e8e3e" count={done.length} openMap={openMap} setOpen={setOpen}>
-          {done.length ? <table>{head}<tbody>{done.map(row)}</tbody></table> : <div className="empty">No completed orders.</div>}
+          {done.length ? <table className="stage-table">{head}<tbody>{done.map(row)}</tbody></table> : <div className="empty">No completed orders.</div>}
         </Section>
       </>}
     </div>
@@ -530,7 +641,10 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
   const incCard = (o) => {
     const cardId = `card_${o.wo}`;
     const cardOpen = !!openMap[cardId];
+    const infoKey = `info_${o.wo}`;
+    const infoOpen = !!openMap[infoKey];
     const toggle = () => setOpen(s => ({ ...s, [cardId]: !s[cardId] }));
+    const toggleInfo = () => setOpen(s => ({ ...s, [infoKey]: !s[infoKey] }));
     const openBtn = (
       <button className="mini b-grey no-print" onClick={toggle}>
         {cardOpen ? "▾ Hide full challan" : "▸ Open full challan"}
@@ -551,6 +665,7 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
           <strong>{woTitle(o)} · {o.party}{overdue && <span className="od-badge">⚠ {daysInCurrentStage(o)}d in stage</span>}</strong>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button className="mini b-grey no-print" onClick={toggleInfo}>{infoOpen ? "▾ Hide details" : "ℹ Order details"}</button>
             {openBtn}
             <button className="mini b-blue no-print" onClick={() => openChallan(o, which === 4 ? "pc" : "dispatch")}>🖨 Print</button>
             {o.qty > 1 && <button className="mini b-grey no-print" onClick={() => onSplit(o)}>✂ Split</button>}
@@ -560,6 +675,7 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
           </div>
         </div>
         {summary}
+        {infoOpen && <div style={{ margin: "10px 0" }}><OrderInfo o={o} /></div>}
         {cardOpen && (which === 4 ? (
           <>
             <table style={{ maxWidth: 430, margin: "0 0 14px" }}><tbody>
@@ -604,8 +720,8 @@ function CardStage({ which, orders, patch, advance, dispatch, openChallan, openM
         <tr><td className="auto-cell">Panel</td><td className="auto-cell">{o.panelType}</td></tr>
         {which === 4
           ? <><tr><td className="auto-cell">P.C. Location</td><td className="auto-cell">{o.s4.location || "-"}</td></tr>
-              <tr><td className="auto-cell">Weight</td><td className="auto-cell">{o.s4.weight || "-"} KGS</td></tr></>
-          : <><tr><td className="auto-cell">Final Weight</td><td className="auto-cell">{o.s5.weight || "-"} KGS</td></tr>
+              <tr><td className="auto-cell">Weight</td><td className="auto-cell">{o.s4.weight || "-"} {o.weightUnit || "KGS"}</td></tr></>
+          : <><tr><td className="auto-cell">Final Weight</td><td className="auto-cell">{o.s5.weight || "-"} {o.weightUnit || "KGS"}</td></tr>
               <tr><td className="auto-cell">Gaadi No.</td><td className="auto-cell">{o.s5.gaadi || "-"}</td></tr></>}
       </tbody></table>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -641,13 +757,14 @@ function monthRange(offset = 0) {
   return { from: `${y}-${p(m + 1)}-01`, to: `${y}-${p(m + 1)}-${p(new Date(y, m + 1, 0).getDate())}` };
 }
 
-function Reports() {
+function Reports({ orders = [], meta = {} }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
-  const [q, setQ] = useState(""); // search by designer / operator name
+  const [q, setQ] = useState(""); // search term
+  const [searchBy, setSearchBy] = useState("all"); // all | designer | operator | party | gst
   const load = useCallback(() => {
     setLoading(true);
     api.reports({ from, to }).then(setData).catch(e => alert(e.message)).finally(() => setLoading(false));
@@ -683,14 +800,51 @@ function Reports() {
     const st = data.stageTiming || {};
     const wb = XLSX.utils.book_new();
     const aoa = (a) => XLSX.utils.aoa_to_sheet(a);
-    const add = (a, name) => XLSX.utils.book_append_sheet(wb, aoa(a), name);
+    const add = (a, name) => XLSX.utils.book_append_sheet(wb, aoa(a), name.slice(0, 31));
+
+    // ---- when a search is active, export ONLY the filtered person/party/GST ----
+    if (matched) {
+      const cs = completedStats();
+      add([
+        ["NK TECHNO CRAFT INDIA PVT. LTD."],
+        ["Filtered report — " + (searchBy === "all" ? "match" : searchBy) + ": " + q],
+        ["Date range", rangeLabel],
+        ["Generated", new Date().toLocaleString()],
+        [],
+        ["Currently running", running.length, sumPanels(running) + " panels"],
+        ["Completed", completed.length, sumPanels(completed) + " panels"],
+        ["Total orders", matched.length, sumPanels(matched) + " panels"],
+        [],
+        ["Completed — on time", cs.onTime],
+        ["Completed — late", cs.late],
+        ["Completed — no delivery date", cs.noDate],
+        ["On-time %", cs.withDate ? Math.round(cs.onTime / cs.withDate * 100) : "—"],
+        ["Avg late days", cs.avgLate]
+      ], "Summary");
+      add([["WO", "Stage", "Party", "Designer", "Contractor", "Qty", "Days in stage"],
+        ...running.slice().sort((a, b) => a.stage - b.stage).map(o => [woNum(o) + boxTag(o), (STAGE_NAMES[o.stage] || "Stage " + o.stage).replace(/Stage 0\d · /, ""), o.party, o.designer, (o.s3 && o.s3.fabricator) || "", o.qty, daysInCurrentStage(o)])], "In Progress");
+      add([["WO", "Party", "Designer", "Contractor", "Qty", "Delivery", "Completed", "Status", "Late days"],
+        ...completed.slice().sort((a, b) => a.wo - b.wo).map(o => { const ld = orderLateDays(o), cp = orderCompletion(o); return [woNum(o) + boxTag(o), o.party, o.designer, (o.s3 && o.s3.fabricator) || "", o.qty, (o.s3 && o.s3.deliveryDate) || "", cp ? cp.toISOString().slice(0, 10) : "", ld === null ? "No target" : ld > 0 ? "Late" : "On time", ld === null ? "" : Math.max(0, ld)]; })], "Completed");
+      XLSX.writeFile(wb, `NK-Report_${(q || "search").replace(/[^\w]+/g, "-")}_${fileTag}.xlsx`);
+      return;
+    }
     add([
       ["NK TECHNO CRAFT INDIA PVT. LTD."],
-      ["Production Reports — completed (dispatched) work"],
+      ["Production Report"],
       ["Date range", rangeLabel],
       ["Generated", new Date().toLocaleString()],
       [],
-      ["COMPANY TOTAL"],
+      ["COMPANY OVERVIEW"],
+      ["Total orders", c.orders + coRunning.length],
+      ["Total panels", c.panels + coRunningPanels],
+      ["In progress (orders)", coRunning.length],
+      ["In progress (panels)", coRunningPanels],
+      ["  · Cutting (S2)", coRunningByStage[2] || 0],
+      ["  · Fabrication (S3)", coRunningByStage[3] || 0],
+      ["  · Dispatch to P.C. (S4)", coRunningByStage[4] || 0],
+      ["  · Assembly (S5)", coRunningByStage[5] || 0],
+      [],
+      ["COMPLETED (DISPATCHED)"],
       ["Orders done", c.orders],
       ["Panels done", c.panels],
       ["On time", c.onTime],
@@ -717,8 +871,10 @@ function Reports() {
     add(timing(data.designerTiming), "Designer Timing");
     add(timing(data.contractorTiming), "Contractor Timing");
     add([["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery date", "Completed date", "Late days", "Status", "S2 days", "S5 days", "S2 >3d", "S5 >3d", "Lead days"],
-      ...data.detail.map(d => [d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate, d.completedDate, d.lateDays, d.status, d.s2Days, d.s5Days, d.s2Late ? "YES" : "", d.s5Late ? "YES" : "", d.leadDays])], "Order Detail");
-    XLSX.writeFile(wb, `NK-Reports_${fileTag}.xlsx`);
+      ...data.detail.map(d => [d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate, d.completedDate, d.lateDays, d.status, d.s2Days, d.s5Days, d.s2Late ? "YES" : "", d.s5Late ? "YES" : "", d.leadDays])], "Completed Orders");
+    add([["WO", "Stage", "Party", "Designer", "Contractor", "Qty", "Days in stage", "Over 3 days?"],
+      ...coRunning.slice().sort((a, b) => a.stage - b.stage).map(o => [woNum(o) + boxTag(o), (STAGE_NAMES[o.stage] || "Stage " + o.stage).replace(/Stage 0\d · /, ""), o.party, o.designer, (o.s3 && o.s3.fabricator) || "", o.qty, daysInCurrentStage(o), isOverdue(o) ? "YES" : ""])], "In Progress");
+    XLSX.writeFile(wb, `NK-Report_${fileTag}.xlsx`);
   };
 
   const Tbl = ({ head, rows, aligns }) => rows.length
@@ -740,24 +896,61 @@ function Reports() {
   const contractors = data ? mergePeople(data.contractorWork, data.contractorTiming) : [];
   const maxPanels = Math.max(1, ...designers.map(d => d.panels), ...contractors.map(d => d.panels));
 
-  // name search (designer or operator/contractor)
-  const personNames = data ? [...new Set([...designers.map(d => d.name), ...contractors.map(c => c.name)])].filter(n => n && n !== "—").sort() : [];
+  // ---- universal search across ALL orders (incomplete + completed) ----
   const nq = q.trim().toLowerCase();
-  const focusRows = (data && nq) ? data.detail.filter(d => (d.designer || "").toLowerCase().includes(nq) || (d.contractor || "").toLowerCase().includes(nq)) : null;
-  const personStats = (rows) => {
-    const s = { orders: rows.length, panels: 0, onTime: 0, late: 0, noTarget: 0, totalLate: 0, maxLate: 0, s2: 0, s5: 0 };
-    rows.forEach(d => {
-      s.panels += d.panels || 0;
-      if (d.status === "On time") s.onTime++;
-      else if (d.status === "Late") { s.late++; const v = +d.lateDays || 0; s.totalLate += v; if (v > s.maxLate) s.maxLate = v; }
-      else s.noTarget++;
-      if (d.s2Late) s.s2++;
-      if (d.s5Late) s.s5++;
-    });
-    s.onTimePct = (s.onTime + s.late) ? Math.round(s.onTime / (s.onTime + s.late) * 100) : null;
-    s.avgLate = s.late ? Math.round(s.totalLate / s.late * 10) / 10 : 0;
-    return s;
+  const fieldVal = (o, field) => {
+    if (field === "designer") return o.designer || "";
+    if (field === "operator") return (o.s3 && o.s3.fabricator) || "";
+    if (field === "party") return o.party || "";
+    if (field === "gst") return o.gstNo || "";
+    return [o.designer, o.s3 && o.s3.fabricator, o.party, o.gstNo].filter(Boolean).join(" ");
   };
+  // datalist suggestions — use the master lists (General Info) for designers &
+  // contractors so EVERY name shows, even those with no orders yet; party & GST
+  // are pulled from existing orders.
+  const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort();
+  const ordParties = uniq(orders.map(o => o.party));
+  const ordGst = uniq(orders.map(o => o.gstNo));
+  const allDesigners = meta.designers || [];
+  const allContractors = meta.contractors || [];
+  const suggestions =
+    searchBy === "designer" ? uniq(allDesigners) :
+    searchBy === "operator" ? uniq(allContractors) :
+    searchBy === "party" ? ordParties :
+    searchBy === "gst" ? ordGst :
+    uniq([...allDesigners, ...allContractors, ...ordParties, ...ordGst]);
+  // date range applies to the search too: completed → dispatch date, running → order date
+  const fromT = from ? new Date(from + "T00:00:00").getTime() : null;
+  const toT = to ? new Date(to + "T23:59:59.999").getTime() : null;
+  const repDate = (o) => o.stage === 6 ? orderCompletion(o) : (o.date ? new Date(o.date + "T12:00:00") : null);
+  const inRange = (o) => {
+    if (fromT == null && toT == null) return true;
+    const d = repDate(o); if (!d || isNaN(d)) return false;
+    const t = d.getTime();
+    if (fromT != null && t < fromT) return false;
+    if (toT != null && t > toT) return false;
+    return true;
+  };
+  const matched = nq ? orders.filter(o => fieldVal(o, searchBy).toLowerCase().includes(nq) && inRange(o)) : null;
+  const running = matched ? matched.filter(o => o.stage < 6) : [];
+  const completed = matched ? matched.filter(o => o.stage === 6) : [];
+  const sumPanels = (arr) => arr.reduce((s, o) => s + (o.qty || 0), 0);
+  const completedStats = () => {
+    let onTime = 0, late = 0, noDate = 0, totalLate = 0, maxLate = 0;
+    completed.forEach(o => {
+      const ld = orderLateDays(o);
+      if (ld === null) noDate++;
+      else if (ld > 0) { late++; totalLate += ld; if (ld > maxLate) maxLate = ld; }
+      else onTime++;
+    });
+    return { onTime, late, noDate, avgLate: late ? Math.round(totalLate / late * 10) / 10 : 0, maxLate, withDate: onTime + late };
+  };
+
+  // COMPANY-wide in-progress (running) orders in the date range (by order date)
+  const coRunning = orders.filter(o => o.stage >= 2 && o.stage < 6 && inRange(o));
+  const coRunningPanels = sumPanels(coRunning);
+  const coRunningByStage = { 2: 0, 3: 0, 4: 0, 5: 0 };
+  coRunning.forEach(o => { coRunningByStage[o.stage] = (coRunningByStage[o.stage] || 0) + 1; });
 
   // a person panel: name, panel bar, and on-time/late split bar
   const PeopleCard = ({ title, who, people, unitNote }) => (
@@ -803,7 +996,7 @@ function Reports() {
   return (
     <div className="view">
       <h2 className="title">Reports</h2>
-      <div className="handler">A snapshot of <b>finished work</b> (orders that have been dispatched) for the dates you pick below. “Late” means it shipped after the promised delivery date set in Stage&nbsp;03.</div>
+      <div className="handler">Company work for the dates you pick: <b>completed</b> (dispatched) and <b>in&nbsp;progress</b>. “Late” means it shipped after the promised delivery date set in Stage&nbsp;03. Completed orders are dated by dispatch; in-progress by order date.</div>
 
       <div className="toolbar no-print" style={{ flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -824,9 +1017,16 @@ function Reports() {
 
       <div className="toolbar no-print" style={{ gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <label style={{ display: "inline" }}>🔍 Search a designer or operator</label>
-          <input list="rep-names" value={q} onChange={e => setQ(e.target.value)} placeholder="type a name…" style={{ width: 240, display: "inline-block", background: "#fff" }} />
-          <datalist id="rep-names">{personNames.map(n => <option key={n} value={n} />)}</datalist>
+          <label style={{ display: "inline" }}>🔍 Search by</label>
+          <select value={searchBy} onChange={e => setSearchBy(e.target.value)} style={{ width: "auto", display: "inline-block", background: "#fff" }}>
+            <option value="all">Anything</option>
+            <option value="designer">Designer</option>
+            <option value="operator">Operator / Contractor</option>
+            <option value="party">Party name</option>
+            <option value="gst">GST No.</option>
+          </select>
+          <input list="rep-search" value={q} onChange={e => setQ(e.target.value)} placeholder={searchBy === "gst" ? "type GST no…" : searchBy === "party" ? "type party name…" : "type a name…"} style={{ width: 240, display: "inline-block", background: "#fff" }} />
+          <datalist id="rep-search">{suggestions.map(n => <option key={n} value={n} />)}</datalist>
           {q && <button className="ghost" onClick={() => setQ("")}>✕ Clear</button>}
         </div>
       </div>
@@ -835,82 +1035,104 @@ function Reports() {
 
       {loading && <div className="empty">Loading…</div>}
 
-      {/* focused single-person report */}
-      {data && !loading && focusRows && (() => {
-        if (!focusRows.length) return <div className="empty">No finished orders for “{q}” in this range. Check the spelling, widen the dates, or pick a name from the list.</div>;
-        const s = personStats(focusRows);
-        const asDesigner = focusRows.some(d => (d.designer || "").toLowerCase().includes(nq));
-        const asContractor = focusRows.some(d => (d.contractor || "").toLowerCase().includes(nq));
+      {/* focused search — running + completed for a designer / operator / party / GST */}
+      {!loading && matched && (() => {
+        if (!matched.length) return <div className="empty">No orders found for “{q}” in <b>{rangeLabel}</b>. Widen the dates (try “All time”), change the “Search by” field, or check the spelling.</div>;
+        const cs = completedStats();
+        const stShort = (o) => (STAGE_NAMES[o.stage] || "Stage " + o.stage).replace(/Stage 0\d · /, "");
+        // show GSTIN when a single party/gst is in focus
+        const gstSet = [...new Set(matched.map(o => o.gstNo).filter(Boolean))];
         return <>
           <div className="rep-hero">
-            <div className="hero-item">
-              <div className="hero-n">{s.orders}</div><div className="hero-l">Orders finished</div>
-              <div className="hero-sub">{s.panels} panels</div>
-            </div>
+            <div className="hero-item"><div className="hero-n" style={{ color: "#e08e0b" }}>{running.length}</div><div className="hero-l">Currently running</div><div className="hero-sub">{sumPanels(running)} panels in progress</div></div>
             <div className="hero-divider" />
-            <div className="hero-item">
-              <div className="hero-n" style={{ color: s.onTimePct === null ? "var(--muted)" : s.onTimePct >= 70 ? "#1e8e3e" : "#d93025" }}>{pct(s.onTimePct)}</div>
-              <div className="hero-l">Delivered on time</div>
-              <div className="hero-sub"><span style={{ color: "#1e8e3e" }}>{s.onTime} on time</span> · <span style={{ color: "#d93025" }}>{s.late} late</span>{s.noTarget ? ` · ${s.noTarget} no date` : ""}</div>
-            </div>
+            <div className="hero-item"><div className="hero-n" style={{ color: "#1e8e3e" }}>{completed.length}</div><div className="hero-l">Completed</div><div className="hero-sub">{sumPanels(completed)} panels dispatched</div></div>
             <div className="hero-divider" />
-            <div className="hero-item">
-              <div className="hero-n">{s.late ? s.avgLate + "d" : "0d"}</div><div className="hero-l">Avg delay when late</div>
-              <div className="hero-sub">{s.late ? `worst ${s.maxLate} days` : "nothing late 🎉"}</div>
-            </div>
+            <div className="hero-item"><div className="hero-n">{matched.length}</div><div className="hero-l">Total orders</div><div className="hero-sub">{sumPanels(matched)} panels total</div></div>
           </div>
 
-          <div className={"rep-sla " + ((s.s2 || s.s5) ? "bad" : "good")}>
-            {(s.s2 || s.s5)
-              ? <><b>⚠ 3-day rule broken</b> on {s.s2 ? `${s.s2} order(s) in Cutting (Stage 02)` : ""}{s.s2 && s.s5 ? " and " : ""}{s.s5 ? `${s.s5} order(s) in Assembly (Stage 05)` : ""}.</>
-              : <><b>✓ 3-day rule respected</b> — no order over 3 days in Cutting or Assembly.</>}
+          {(completed.length > 0 || gstSet.length > 0) && <div className="rep-sla good" style={{ background: "#f1eefb", border: "1px solid #d9d2f0", color: "#3a2f6b" }}>
+            {gstSet.length === 1 && <><b>GSTIN:</b> {gstSet[0]} &nbsp;·&nbsp; </>}
+            {completed.length > 0
+              ? <><b>{cs.onTime}</b> on time · <b style={{ color: "#d93025" }}>{cs.late}</b> late{cs.noDate ? ` · ${cs.noDate} no date` : ""}{cs.withDate ? ` · ${Math.round(cs.onTime / cs.withDate * 100)}% on-time` : ""}{cs.late ? ` · avg ${cs.avgLate}d late` : ""}</>
+              : "No completed orders yet."}
+          </div>}
+
+          <div className="card">
+            <div className="rep-h">⏳ Currently running ({running.length})</div>
+            {running.length ? <Tbl
+              head={["WO", "Stage", "Party", "Designer", "Contractor", "Qty", "Days in stage"]}
+              aligns={["", "", "", "", "", "num", "num"]}
+              rows={running.slice().sort((a, b) => a.stage - b.stage).map(o => {
+                const od = isOverdue(o), d = daysInCurrentStage(o);
+                return [woNum(o) + boxTag(o), stShort(o), o.party, o.designer, (o.s3 && o.s3.fabricator) || "—", o.qty,
+                  <span key="d" style={{ color: od ? "#d93025" : undefined, fontWeight: od ? 700 : 400 }}>{d == null ? "—" : d + "d"}{od ? " ⚠" : ""}</span>];
+              })} /> : <div className="empty">Nothing in progress.</div>}
           </div>
 
           <div className="card">
-            <div className="rep-h">
-              Details for “{q}”
-              <span style={{ fontWeight: 400, fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>
-                {asDesigner && asContractor ? "appears as Designer & Operator" : asDesigner ? "as Designer" : "as Operator/Contractor"}
-              </span>
-            </div>
-            <Tbl
-              head={["WO", "Box", "Designer", "Contractor", "Party", "Panels", "Delivery", "Completed", "Late days", "Status", "Cutting (S2)", "Assembly (S5)", "Total days"]}
-              aligns={["", "", "", "", "", "num", "", "", "num", "", "num", "num", "num"]}
-              rows={focusRows.map(d => [
-                d.wo, d.box, d.designer, d.contractor, d.party, d.panels, d.deliveryDate || "—", d.completedDate,
-                d.lateDays === "" ? "—" : d.lateDays,
-                <span key="s" style={{ color: d.status === "Late" ? "#d93025" : d.status === "On time" ? "#1e8e3e" : "var(--muted)", fontWeight: 600 }}>{d.status}</span>,
-                <span key="s2" style={{ color: d.s2Late ? "#d93025" : undefined, fontWeight: d.s2Late ? 700 : 400 }}>{d.s2Days === "" ? "—" : d.s2Days + "d"}</span>,
-                <span key="s5" style={{ color: d.s5Late ? "#d93025" : undefined, fontWeight: d.s5Late ? 700 : 400 }}>{d.s5Days === "" ? "—" : d.s5Days + "d"}</span>,
-                d.leadDays === "" ? "—" : d.leadDays + "d"
-              ])} />
-            <div className="hint" style={{ marginTop: 6 }}>Showing finished (dispatched) orders only. Clear the search to see the full company report.</div>
+            <div className="rep-h">✔ Completed ({completed.length})</div>
+            {completed.length ? <Tbl
+              head={["WO", "Party", "Designer", "Contractor", "Qty", "Delivery", "Completed", "Status"]}
+              aligns={["", "", "", "", "num", "", "", ""]}
+              rows={completed.slice().sort((a, b) => a.wo - b.wo).map(o => {
+                const ld = orderLateDays(o), comp = orderCompletion(o);
+                const status = ld === null ? "No target date" : ld > 0 ? `Late (${ld}d)` : "On time";
+                const col = ld === null ? "var(--muted)" : ld > 0 ? "#d93025" : "#1e8e3e";
+                return [woNum(o) + boxTag(o), o.party, o.designer, (o.s3 && o.s3.fabricator) || "—", o.qty, (o.s3 && o.s3.deliveryDate) || "—",
+                  comp ? comp.toISOString().slice(0, 10) : "—",
+                  <span key="s" style={{ color: col, fontWeight: 600 }}>{status}</span>];
+              })} /> : <div className="empty">None completed yet.</div>}
           </div>
+          <div className="hint">Respects the date filter above — running orders by their order date, completed orders by dispatch date. Clear the search to see the full company report.</div>
         </>;
       })()}
 
-      {data && data.company && !loading && !focusRows && (c.orders === 0 ? (
-        <div className="empty">No finished work in this date range yet. Try “All time”, or pick a wider range.</div>
+      {data && data.company && !loading && !matched && ((c.orders === 0 && coRunning.length === 0) ? (
+        <div className="empty">No orders in this date range. Try “All time”, or pick a wider range.</div>
       ) : <>
-        {/* Company at a glance */}
+        {/* Company at a glance — total / completed / in progress */}
         <div className="rep-hero">
           <div className="hero-item">
-            <div className="hero-n">{c.orders}</div>
-            <div className="hero-l">Orders finished</div>
+            <div className="hero-n">{c.orders + coRunning.length}</div>
+            <div className="hero-l">Total orders</div>
+            <div className="hero-sub">{c.panels + coRunningPanels} panels</div>
+          </div>
+          <div className="hero-divider" />
+          <div className="hero-item">
+            <div className="hero-n" style={{ color: "#1e8e3e" }}>{c.orders}</div>
+            <div className="hero-l">Completed</div>
             <div className="hero-sub">{c.panels} panels · {c.totalKgs.toLocaleString()} kg shipped</div>
           </div>
           <div className="hero-divider" />
           <div className="hero-item">
-            <div className="hero-n" style={{ color: c.onTimePct === null ? "var(--muted)" : c.onTimePct >= 70 ? "#1e8e3e" : "#d93025" }}>{pct(c.onTimePct)}</div>
-            <div className="hero-l">Delivered on time</div>
-            <div className="hero-sub"><span style={{ color: "#1e8e3e" }}>{c.onTime} on time</span> · <span style={{ color: "#d93025" }}>{c.late} late</span>{c.noTarget ? ` · ${c.noTarget} no date` : ""}</div>
+            <div className="hero-n" style={{ color: "#e08e0b" }}>{coRunning.length}</div>
+            <div className="hero-l">In progress</div>
+            <div className="hero-sub">{coRunningPanels} panels still in the line</div>
           </div>
-          <div className="hero-divider" />
-          <div className="hero-item">
-            <div className="hero-n">{c.late ? c.avgLateDays + "d" : "0d"}</div>
-            <div className="hero-l">Avg delay when late</div>
-            <div className="hero-sub">{c.late ? `worst was ${c.maxLateDays} days` : "nothing late 🎉"}</div>
+        </div>
+
+        {/* completed on-time summary line */}
+        <div className="rep-sla good" style={{ background: "#f1eefb", border: "1px solid #d9d2f0", color: "#3a2f6b" }}>
+          <b>Completed work:</b> <span style={{ color: "#1e8e3e" }}>{c.onTime} on time</span> · <span style={{ color: "#d93025" }}>{c.late} late</span>{c.noTarget ? ` · ${c.noTarget} no date` : ""}{c.onTimePct !== null ? ` · ${c.onTimePct}% on-time` : ""}{c.late ? ` · avg ${c.avgLateDays}d late (worst ${c.maxLateDays}d)` : ""}
+        </div>
+
+        {/* In progress now */}
+        <div className="card">
+          <div className="rep-h">⏳ In progress now ({coRunning.length}) — {coRunningPanels} panels</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: coRunning.length ? 10 : 0 }}>
+            {[[2, "Cutting/Bending"], [3, "Fabrication"], [4, "Dispatch to P.C."], [5, "Assembly"]].map(([s, lbl]) => (
+              <span key={s} className="alert-chip" style={{ background: "#fff", borderColor: "#d9d2f0" }}>{lbl}: <b>{coRunningByStage[s] || 0}</b></span>
+            ))}
           </div>
+          {coRunning.length ? <Tbl
+            head={["WO", "Stage", "Party", "Designer", "Contractor", "Qty", "Days in stage"]}
+            aligns={["", "", "", "", "", "num", "num"]}
+            rows={coRunning.slice().sort((a, b) => a.stage - b.stage || a.wo - b.wo).map(o => {
+              const od = isOverdue(o), d = daysInCurrentStage(o);
+              return [woNum(o) + boxTag(o), (STAGE_NAMES[o.stage] || "Stage " + o.stage).replace(/Stage 0\d · /, ""), o.party, o.designer, (o.s3 && o.s3.fabricator) || "—", o.qty,
+                <span key="d" style={{ color: od ? "#d93025" : undefined, fontWeight: od ? 700 : 400 }}>{d == null ? "—" : d + "d"}{od ? " ⚠" : ""}</span>];
+            })} /> : <div className="empty">Nothing in progress in this range.</div>}
         </div>
 
         {/* 3-day rule callout */}
@@ -1070,7 +1292,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [view, setView] = useState("dashboard");
-  const [meta, setMeta] = useState({ designers: [], contractors: [], bomItems: [], pcLocations: [], nextWO: 101 });
+  const [meta, setMeta] = useState({ designers: [], contractors: [], panelTypes: [], bomItems: [], pcLocations: [], nextWO: 101 });
   const [orders, setOrders] = useState([]);
   const [openMap, setOpen] = useState({});
   const [err, setErr] = useState("");
@@ -1102,7 +1324,7 @@ export default function App() {
     try {
       const calls = [api.orders()];
       // meta is needed for admin + stage 1 (designer) + stage 3 (contractor)
-      calls.push(api.meta().catch(() => ({ designers: [], contractors: [], bomItems: [], pcLocations: [], nextWO: 101 })));
+      calls.push(api.meta().catch(() => ({ designers: [], contractors: [], panelTypes: [], bomItems: [], pcLocations: [], nextWO: 101 })));
       const [o, m] = await Promise.all(calls);
       setOrders(o); setMeta(m); setErr(""); setReady(true);
     } catch (e) { setErr(e.message); setReady(true); }
@@ -1186,7 +1408,7 @@ export default function App() {
           {view === "dashboard" && isAdmin && <Dashboard orders={orders} isAdmin={isAdmin} meta={meta} onEdit={setEditOrder} onDelete={removeOrder} />}
           {view === "general" && isAdmin && <General meta={meta} orders={orders} refresh={refresh} />}
           {view === "users" && isAdmin && <UsersAdmin currentUser={user} />}
-          {view === "reports" && isAdmin && <Reports />}
+          {view === "reports" && isAdmin && <Reports orders={orders} meta={meta} />}
           {view === "stage1" && <StageOne meta={meta} nextWO={meta.nextWO} onCreated={refresh} />}
           {view === "stage2" && <TableStage title="Stage 02 — Cutting & Bending" handler="Handled by Mukesh Sodha / Deepak Vacheta" stageNo={2} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} onSplit={setSplitFor} />}
           {view === "stage3" && <TableStage title="Stage 03 — Fabrication" handler="Handled by Irfan Belim" stageNo={3} orders={orders} meta={meta} patch={patch} advance={advance} openMap={openMap} setOpen={setOpen} onSplit={setSplitFor} />}

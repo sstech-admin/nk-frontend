@@ -107,6 +107,14 @@ small.hint{color:var(--muted);font-weight:normal;}
 .kpi-n{font-size:22px;font-weight:700;line-height:1.1;}
 .kpi-l{font-size:11px;color:var(--muted);margin-top:3px;}
 
+/* ---- read-only Stage-01 order details (shown in every later stage) ---- */
+.order-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 18px;background:#f6f5fb;border:1px solid #e6e3f0;border-radius:8px;padding:12px 14px;}
+.oi-item{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;border-bottom:1px dashed #e2def0;padding:3px 0;}
+.oi-k{color:var(--muted);font-weight:600;white-space:nowrap;}
+.oi-v{text-align:right;}
+tr.info-row > td{background:#f6f5fb;padding:8px;}
+@media print{ tr.info-row > td{background:#f6f5fb !important;} }
+
 /* ---- redesigned reports ---- */
 .rep-range{font-size:13px;color:var(--muted);margin:4px 0 12px;}
 .rep-h{font-weight:700;font-size:15px;margin-bottom:10px;}
@@ -147,6 +155,86 @@ small.hint{color:var(--muted);font-weight:normal;}
 @media (max-width:640px){ .stage-label{width:120px;} .hero-divider{display:none;} }
 
 .print-only{display:none;}
+
+/* ============================ MOBILE / PHONE ============================ */
+@media (max-width:760px){
+  body{font-size:13px;}
+
+  /* header stacks, smaller title */
+  header{padding:10px 14px;gap:8px;}
+  header h1{font-size:15px;}
+  header .sub{font-size:11px;}
+  header > span[style]{margin-left:0 !important;width:100%;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+
+  /* nav becomes a swipeable single-row tab strip */
+  nav{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 8px;scrollbar-width:none;}
+  nav::-webkit-scrollbar{display:none;}
+  nav button{padding:12px 12px;white-space:nowrap;font-size:13px;flex:0 0 auto;}
+
+  main{padding:14px 10px;}
+  h2.title{font-size:19px;margin:2px 0 14px;}
+  .card{padding:14px;border-radius:10px;}
+  .legend{gap:10px;font-size:11px;}
+
+  /* wide tables scroll sideways inside their container instead of breaking layout */
+  .card, .sec-body, .view > table{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  table{white-space:nowrap;}
+  th,td{padding:8px 9px;}
+
+  /* Stage 02/03 tables -> one stacked card per order (no sideways scrolling) */
+  .stage-table{white-space:normal;}
+  .stage-table thead{display:none;}
+  .stage-table, .stage-table tbody, .stage-table tr, .stage-table td{display:block;width:100%;}
+  .stage-table tr{margin-bottom:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;}
+  .stage-table tr:nth-child(even) td{background:#fff;}
+  .stage-table td{border:none;border-bottom:1px solid #eee;padding:9px 12px;text-align:left;}
+  .stage-table td.auto-cell{background:#fff !important;}
+  .stage-table td:last-child{border-bottom:none;}
+  .stage-table td::before{content:attr(data-label);display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px;}
+  .stage-table td:not([data-label])::before, .stage-table td[data-label=""]::before{display:none;}
+  .stage-table td input:not([type=checkbox]):not([type=radio]),.stage-table td select{width:100% !important;max-width:340px;}
+  .stage-table td .chk{display:inline-flex !important;width:auto;margin:0 18px 0 0;}
+  .stage-table td .chk input{width:auto !important;}
+  .stage-table .num{text-align:left;}
+  /* the expandable order-details row spans full width with no label */
+  .stage-table tr.info-row{border:none;background:transparent;margin-bottom:12px;}
+  .stage-table tr.info-row td{padding:0;border:none;}
+
+  /* prevent iOS auto-zoom on focus (needs >=16px) */
+  input[type=text],input[type=number],input[type=date],input[type=password],input:not([type]),select,textarea{font-size:16px;}
+
+  /* modals fill the screen */
+  .modal{padding:8px;}
+  .modal-inner{padding:14px;max-width:100%;}
+  /* the challan is a 2-column print layout — on phones stack it into ONE column
+     so it fits the screen (no sideways scrolling, no overlap) */
+  .challan{min-width:0;}
+  .challan > div{flex-direction:column !important;}
+  .challan > div > div{flex:1 1 auto !important;border-right:none !important;}
+  .challan table{white-space:normal;}
+  .challan input:not([type=checkbox]){max-width:100%;}
+
+  /* report hero: stack the three numbers */
+  .rep-hero{flex-direction:column;gap:12px;align-items:stretch;padding:14px;}
+  .hero-divider{display:none;}
+  .hero-n{font-size:30px;}
+  .hero-item{border-bottom:1px solid #efedf5;padding-bottom:10px;}
+  .hero-item:last-child{border-bottom:none;padding-bottom:0;}
+
+  .stage-label{width:120px;font-size:12px;}
+  .toolbar{gap:8px;}
+  .toolbar input,.toolbar select{width:100%;}
+
+  /* dashboard KPI: two-up on phone */
+  .kpi{grid-template-columns:1fr 1fr;gap:10px;}
+  .kpi .box{padding:14px;}
+  .kpi .box .n{font-size:22px;}
+}
+
+@media (max-width:420px){
+  .kpi{grid-template-columns:1fr;}
+  nav button{padding:11px 10px;}
+}
 
 @media print{
   header,nav,.toolbar,.no-print,.legend{display:none !important;}
