@@ -186,6 +186,7 @@ function Challan({ o, type, patch, meta }) {
         <tr><td className="challan-blue"><b>WO NO.:</b> {woNum(o)}{boxTag(o)}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
         <tr><td colSpan={2} className="challan-blue"><b>CUSTOMER NAME:</b> {o.party}</td></tr>
         <tr><td className="challan-blue"><b>GSTIN:</b> {o.gstNo || "-"}</td><td className="challan-blue"><b>GST:</b> {o.gstPct ?? 0}%</td></tr>
+        <tr><td className="challan-blue"><b>PHONE:</b> {o.phone || "-"}</td><td className="challan-blue"><b>AREA:</b> {o.area || "-"}</td></tr>
         <tr><td className="challan-blue"><b>CONTRACTOR:</b> {o.s3.fabricator || "-"}</td><td className="challan-blue"><b>DESIGNER:</b> {o.designer}</td></tr>
         <tr><td colSpan={2} className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s4.weight" val={s.weight} type="number" /> {o.weightUnit || "KGS"}</td></tr>
         <tr className="head"><td colSpan={2}>COLOR CODE OF PANEL</td></tr>
@@ -214,6 +215,7 @@ function Challan({ o, type, patch, meta }) {
         <tr><td className="challan-blue"><b>WO NO.:</b> {woNum(o)}{boxTag(o)}</td><td className="challan-blue"><b>P.O. NO.:</b> {o.pono || "-"}</td></tr>
         <tr><td colSpan={2} className="challan-blue"><b>CUSTOMER NAME:</b> {o.party}</td></tr>
         <tr><td className="challan-blue"><b>GSTIN:</b> {o.gstNo || "-"}</td><td className="challan-blue"><b>GST:</b> {o.gstPct ?? 0}%</td></tr>
+        <tr><td className="challan-blue"><b>PHONE:</b> {o.phone || "-"}</td><td className="challan-blue"><b>AREA:</b> {o.area || "-"}</td></tr>
         <tr><td className="challan-blue"><b>CONTRACTOR:</b> {o.s3.fabricator || "-"}</td><td className="challan-blue"><b>DESIGNER:</b> {o.designer}</td></tr>
         <tr><td className="challan-yellow" style={{ textAlign: "center" }}><b>WEIGHT:</b> <Inp path="s5.weight" val={s.weight} type="number" /> {o.weightUnit || "KGS"}</td>
             <td className="challan-yellow"><b>GAADI NO.:</b> <Inp path="s5.gaadi" val={s.gaadi} /></td></tr>
@@ -259,7 +261,8 @@ function EditOrderModal({ order, meta, onClose, onSaved }) {
     desc: order.desc || "", parts: order.parts || 0, custwo: order.custwo || "",
     pcType: order.pcType || "Single Coat", cBody: order.cBody || "", cMP: order.cMP || "",
     cBase: order.cBase || "", rate: order.rate || 0, remarks: order.remarks || "",
-    gstNo: order.gstNo || "", gstPct: order.gstPct ?? 18, weightUnit: order.weightUnit || "KGS"
+    gstNo: order.gstNo || "", gstPct: order.gstPct ?? 18, weightUnit: order.weightUnit || "KGS",
+    phone: order.phone || "", area: order.area || ""
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -273,7 +276,8 @@ function EditOrderModal({ order, meta, onClose, onSaved }) {
         pono: f.pono, qty: Number(f.qty) || 0, desc: f.desc, parts: Number(f.parts) || 0,
         custwo: f.custwo, pcType: f.pcType, cBody: f.cBody, cMP: f.cMP, cBase: f.cBase,
         rate: Number(f.rate) || 0, remarks: f.remarks,
-        gstNo: f.gstNo, gstPct: Number(f.gstPct) || 0, weightUnit: f.weightUnit
+        gstNo: f.gstNo, gstPct: Number(f.gstPct) || 0, weightUnit: f.weightUnit,
+        phone: f.phone, area: f.area
       });
       onSaved();
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -318,6 +322,8 @@ function EditOrderModal({ order, meta, onClose, onSaved }) {
             <select value={f.weightUnit} onChange={e => set("weightUnit", e.target.value)}>
               <option value="KGS">KGS</option><option value="Nos">Nos</option>
             </select></div>
+          <div><label>Phone</label><input value={f.phone} onChange={e => set("phone", e.target.value)} /></div>
+          <div><label>Area</label><input value={f.area} onChange={e => set("area", e.target.value)} /></div>
         </div>
         <label>Remarks</label><input value={f.remarks} onChange={e => set("remarks", e.target.value)} />
         {err && <div style={{ color: "#d93025", marginTop: 8 }}>{err}</div>}
@@ -335,7 +341,9 @@ function Dashboard({ orders, isAdmin, meta, onEdit, onDelete }) {
   const total = orders.length;
   const c = { 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
   orders.forEach(o => c[o.stage]++);
-  const kgs = orders.filter(o => o.stage === 6).reduce((s, o) => s + (Number(o.s5.weight) || 0), 0);
+  const done6 = orders.filter(o => o.stage === 6);
+  const kgs = done6.filter(o => (o.weightUnit || "KGS") !== "Nos").reduce((s, o) => s + (Number(o.s5.weight) || 0), 0);
+  const nos = done6.filter(o => o.weightUnit === "Nos").reduce((s, o) => s + (Number(o.s5.weight) || 0), 0);
   return (
     <div className="view">
       <h2 className="title">Production Dashboard</h2>
@@ -343,7 +351,7 @@ function Dashboard({ orders, isAdmin, meta, onEdit, onDelete }) {
         <div className="box"><div className="n">{total}</div><div className="l">Total Orders</div></div>
         <div className="box"><div className="n">{c[2] + c[3]}</div><div className="l">In Production</div></div>
         <div className="box"><div className="n">{c[4] + c[5]}</div><div className="l">Coating / Assembly</div></div>
-        <div className="box"><div className="n">{kgs.toLocaleString()}</div><div className="l">KGS Dispatched</div></div>
+        <div className="box"><div className="n" style={{ fontSize: 20 }}>{kgs.toLocaleString()} KGS{nos ? <> · {nos.toLocaleString()} Nos</> : ""}</div><div className="l">Dispatched</div></div>
       </div>
       <div className="card">
         <div className="toolbar"><strong>All Work Orders</strong><span className="pill">{total} orders</span></div>
@@ -382,6 +390,15 @@ function General({ meta, orders, refresh }) {
     await api.delPanelType(n); refresh();
   };
   const panelTypes = meta.panelTypes || [];
+  const parties = meta.parties || [];
+  const [pf, setPf] = useState({ name: "", gstNo: "", gstPct: "18", phone: "", area: "" });
+  const setP = (k, v) => setPf(s => ({ ...s, [k]: v }));
+  const addParty = async () => {
+    if (!pf.name.trim()) return alert("Party name is required.");
+    try { await api.addParty({ ...pf, gstPct: Number(pf.gstPct) || 0 }); setPf({ name: "", gstNo: "", gstPct: "18", phone: "", area: "" }); refresh(); }
+    catch (e) { alert(e.message); }
+  };
+  const delParty = async (n) => { if (confirm(`Delete party "${n}"?`)) { try { await api.delParty(n); refresh(); } catch (e) { alert(e.message); } } };
   return (
     <div className="view">
       <h2 className="title">General Information</h2>
@@ -422,6 +439,30 @@ function General({ meta, orders, refresh }) {
           </div>
           <div className="hint" style={{ marginTop: 6 }}>These appear as checkboxes on Stage 01 (an order can have several panel types).</div>
         </div>
+        <div className="card">
+          <div className="toolbar"><strong>Parties / Customers</strong><span className="pill">{parties.length}</span></div>
+          <table className="stage-table"><thead><tr><th>Party</th><th>GSTIN</th><th>GST%</th><th>Phone</th><th>Area</th><th style={{ width: 50 }}></th></tr></thead>
+            <tbody>{parties.map(p =>
+              <tr key={p.name}>
+                <td data-label="Party">{p.name}</td>
+                <td data-label="GSTIN">{p.gstNo || "-"}</td>
+                <td data-label="GST%">{(p.gstPct ?? 0)}%</td>
+                <td data-label="Phone">{p.phone || "-"}</td>
+                <td data-label="Area">{p.area || "-"}</td>
+                <td data-label="" style={{ textAlign: "center" }}><button className="danger" onClick={() => delParty(p.name)}>Del</button></td>
+              </tr>)}
+            </tbody></table>
+          <div className="grid2" style={{ gap: 8, marginTop: 8 }}>
+            <div><label style={{ margin: "0 0 4px" }}>Party Name *</label><input value={pf.name} onChange={e => setP("name", e.target.value)} /></div>
+            <div><label style={{ margin: "0 0 4px" }}>GST No. (GSTIN)</label><input value={pf.gstNo} maxLength={15} onChange={e => setP("gstNo", e.target.value.toUpperCase())} /></div>
+            <div><label style={{ margin: "0 0 4px" }}>GST %</label>
+              <select value={pf.gstPct} onChange={e => setP("gstPct", e.target.value)}>{[0, 5, 12, 18, 28].map(x => <option key={x} value={x}>{x}%</option>)}</select></div>
+            <div><label style={{ margin: "0 0 4px" }}>Phone</label><input value={pf.phone} onChange={e => setP("phone", e.target.value)} /></div>
+            <div><label style={{ margin: "0 0 4px" }}>Area</label><input value={pf.area} onChange={e => setP("area", e.target.value)} /></div>
+            <div style={{ display: "flex", alignItems: "flex-end" }}><button className="act" style={{ width: "100%" }} onClick={addParty}>＋ Add Party</button></div>
+          </div>
+          <div className="hint" style={{ marginTop: 6 }}>Selecting a party on Stage 01 auto-fills its GST, phone and area.</div>
+        </div>
       </div>
     </div>
   );
@@ -432,12 +473,18 @@ const EMPTY_FORM = {
   pono: "", qty: "", desc: "", parts: "", custwo: "", pcType: "Single Coat",
   cBody: "", cMP: "", cBase: "", acc: { point: false, p3: false, pu: false, patti: false, other: "", pointNote: "", p3Note: "" },
   rate: "", rIncl: true, rExtra: false, remarks: "",
-  gstNo: "", gstPct: "18", weightUnit: "KGS"
+  gstNo: "", gstPct: "18", weightUnit: "KGS", phone: "", area: ""
 };
 function StageOne({ meta, nextWO, onCreated }) {
   const [f, setF] = useState({ ...EMPTY_FORM, designer: meta.designers[0] || "" });
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
   const setAcc = (k, v) => setF(s => ({ ...s, acc: { ...s.acc, [k]: v } }));
+  const parties = meta.parties || [];
+  // selecting a party auto-fills GST, phone and area from the master record
+  const pickParty = (name) => {
+    const p = parties.find(x => x.name === name);
+    setF(s => ({ ...s, party: name, gstNo: p ? p.gstNo : "", gstPct: p ? String(p.gstPct ?? 18) : s.gstPct, phone: p ? p.phone : "", area: p ? p.area : "" }));
+  };
   const submit = async () => {
     if (!f.party.trim()) { alert("Party Name is required."); return; }
     try {
@@ -458,7 +505,15 @@ function StageOne({ meta, nextWO, onCreated }) {
             <label>Date</label><input type="date" value={f.date} onChange={e => set("date", e.target.value)} />
             <label>Designer Name</label>
             <select value={f.designer} onChange={e => set("designer", e.target.value)}>{meta.designers.map(d => <option key={d}>{d}</option>)}</select>
-            <label>Party Name</label><input value={f.party} onChange={e => set("party", e.target.value)} />
+            <label>Party Name</label>
+            <select value={f.party} onChange={e => pickParty(e.target.value)}>
+              <option value="">— select party —</option>
+              {parties.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+              {f.party && !parties.some(p => p.name === f.party) && <option value={f.party}>{f.party}</option>}
+            </select>
+            {parties.length === 0 && <div className="hint" style={{ margin: "4px 0 0" }}>No parties yet — add them in <b>General Info</b>.</div>}
+            <label>Phone</label><input value={f.phone} onChange={e => set("phone", e.target.value)} placeholder="auto-filled from party" />
+            <label>Area</label><input value={f.area} onChange={e => set("area", e.target.value)} placeholder="auto-filled from party" />
             <label>Panel Type <small className="hint">(tick one or more)</small></label>
             {(() => {
               const types = meta.panelTypes || [];
@@ -541,6 +596,7 @@ function OrderInfo({ o }) {
     ["Designer", o.designer], ["Party", o.party], ["Panel Type", o.panelType || "-"],
     ["Size", o.desc || "-"], ["Qty", o.qty], ["Parts (Bhag)", o.parts],
     ["P.O. No.", o.pono || "-"], ["Customer WO", o.custwo || "-"],
+    ["Phone", o.phone || "-"], ["Area", o.area || "-"],
     ["Powder Coating", o.pcType], ["Body Colour", o.cBody || "-"],
     ["Mounting Plate", o.cMP || "-"], ["Base / Stand", o.cBase || "-"],
     ["Accessories", accLine(o)],
@@ -856,6 +912,7 @@ function Reports({ orders = [], meta = {} }) {
       ["Stage 02 over 3 days", c.s2Over3 ?? 0],
       ["Stage 05 over 3 days", c.s5Over3 ?? 0],
       ["Total dispatch (KGS)", c.totalKgs],
+      ["Total dispatch (Nos)", c.totalNos ?? 0],
       [],
       ["AVG DAYS PER STAGE"],
       ["Stage 02 (Cutting)", st.avgS2 ?? "—"],
@@ -1102,7 +1159,7 @@ function Reports({ orders = [], meta = {} }) {
           <div className="hero-item">
             <div className="hero-n" style={{ color: "#1e8e3e" }}>{c.orders}</div>
             <div className="hero-l">Completed</div>
-            <div className="hero-sub">{c.panels} panels · {c.totalKgs.toLocaleString()} kg shipped</div>
+            <div className="hero-sub">{c.panels} panels · {c.totalKgs.toLocaleString()} kg{c.totalNos ? ` · ${c.totalNos.toLocaleString()} nos` : ""} shipped</div>
           </div>
           <div className="hero-divider" />
           <div className="hero-item">
@@ -1292,7 +1349,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [view, setView] = useState("dashboard");
-  const [meta, setMeta] = useState({ designers: [], contractors: [], panelTypes: [], bomItems: [], pcLocations: [], nextWO: 101 });
+  const [meta, setMeta] = useState({ designers: [], contractors: [], panelTypes: [], parties: [], bomItems: [], pcLocations: [], nextWO: 101 });
   const [orders, setOrders] = useState([]);
   const [openMap, setOpen] = useState({});
   const [err, setErr] = useState("");
@@ -1324,7 +1381,7 @@ export default function App() {
     try {
       const calls = [api.orders()];
       // meta is needed for admin + stage 1 (designer) + stage 3 (contractor)
-      calls.push(api.meta().catch(() => ({ designers: [], contractors: [], panelTypes: [], bomItems: [], pcLocations: [], nextWO: 101 })));
+      calls.push(api.meta().catch(() => ({ designers: [], contractors: [], panelTypes: [], parties: [], bomItems: [], pcLocations: [], nextWO: 101 })));
       const [o, m] = await Promise.all(calls);
       setOrders(o); setMeta(m); setErr(""); setReady(true);
     } catch (e) { setErr(e.message); setReady(true); }
@@ -1376,9 +1433,9 @@ export default function App() {
       </nav>
       <main>
         <div className="legend">
-          <span><i className="swatch sw-y" /> Manual entry</span>
-          <span><i className="swatch sw-b" /> Auto (carried forward)</span>
-          <span><i className="swatch sw-g" /> Action</span>
+          <span><i className="swatch sw-y" /> <b>Yellow</b> = type here</span>
+          <span><i className="swatch sw-b" /> <b>Grey</b> = auto-filled (don't edit)</span>
+          <span><i className="swatch sw-g" /> <b>Purple</b> = button / action</span>
           {isAdmin && <>
             <button className="ghost no-print" style={{ marginLeft: "auto" }} onClick={seed}>Load demo data (WO 101 &amp; 102)</button>
             <button className="ghost no-print" onClick={wipe}>Clear all data</button>

@@ -1,7 +1,8 @@
 :root{
   --accent:#673ab7; --accent-d:#4a2b8f; --accent-l:#efe9fb;
-  --yellow:#f4eefe; --blue:#673ab7; --green:#673ab7;
-  --dark:#202124; --muted:#5f6368; --line:#dadce0; --bg:#f0eef7; --soft:#f8f7fc; --autocell:#eef1f6;
+  /* editable ("type here") = warm yellow with amber underline; auto/read-only = plain grey */
+  --yellow:#fff3cd; --yellow-bd:#e0a200; --blue:#673ab7; --green:#673ab7;
+  --dark:#202124; --muted:#5f6368; --line:#dadce0; --bg:#f0eef7; --soft:#f8f7fc; --autocell:#eceef0;
 }
 *{box-sizing:border-box;}
 body{margin:0;font-family:"Google Sans","Roboto","Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--dark);font-size:13px;}
@@ -23,7 +24,7 @@ h2.title{font-size:22px;font-weight:500;padding:0;margin:4px 0 18px;color:var(--
 .legend{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:18px;font-size:12px;color:var(--muted);align-items:center;}
 .legend span{display:inline-flex;align-items:center;gap:6px;}
 .swatch{width:14px;height:14px;border:1px solid #c9c9d6;display:inline-block;border-radius:3px;}
-.sw-y{background:var(--yellow);border-color:var(--accent);} .sw-b{background:var(--autocell);} .sw-g{background:var(--accent);border-color:var(--accent);}
+.sw-y{background:var(--yellow);border-color:var(--yellow-bd);} .sw-b{background:var(--autocell);border-color:#c4c8cf;} .sw-g{background:var(--accent);border-color:var(--accent);}
 
 table{border-collapse:collapse;width:100%;background:#fff;margin-bottom:18px;}
 th,td{border:1px solid #e8eaed;padding:9px 10px;text-align:left;vertical-align:middle;}
@@ -38,16 +39,19 @@ tr:nth-child(even) td{background:#faf9fc;}
 @media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr;}}
 
 label{display:block;font-size:13px;font-weight:500;margin:14px 0 5px;color:var(--dark);}
+/* editable fields: yellow background + thicker amber underline = "write here" */
 input[type=text],input[type=number],input[type=date],input[type=password],input:not([type]),select,textarea{
-  width:100%;padding:9px 11px;border:1px solid var(--line);border-bottom:2px solid #b39ddb;border-radius:8px;font-size:13px;
+  width:100%;padding:9px 11px;border:1px solid #e6cf8a;border-bottom:3px solid var(--yellow-bd);border-radius:8px;font-size:13px;
   background:var(--yellow);outline:none;transition:border-color .15s,box-shadow .15s;font-family:inherit;
 }
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-l);}
-input[readonly],.auto-input{background:var(--autocell) !important;}
+/* read-only / auto-carried: flat grey, no amber underline = "do not type" */
+input[readonly],.auto-input{background:var(--autocell) !important;border:1px solid var(--line) !important;border-bottom:1px solid var(--line) !important;color:var(--muted);}
 textarea{min-height:54px;background:var(--yellow);}
-.chk{display:flex;align-items:center;gap:8px;font-weight:normal;margin:6px 0;font-size:13px;}
+.chk{display:inline-flex;align-items:center;gap:8px;font-weight:normal;margin:6px 0;font-size:13px;cursor:pointer;}
+.chk:hover{color:var(--accent-d);}
 .chk input{width:auto;}
-input[type=radio],input[type=checkbox]{accent-color:var(--accent);}
+input[type=radio],input[type=checkbox]{accent-color:var(--accent);width:18px;height:18px;cursor:pointer;flex:0 0 auto;}
 fieldset{border:1px solid var(--line);border-radius:10px;margin:14px 0;padding:10px 16px;}
 legend{font-weight:600;font-size:12px;padding:0 6px;color:var(--accent-d);}
 
@@ -88,8 +92,8 @@ button.mini:hover{filter:brightness(1.06);}
 .challan .head td{font-weight:600;text-align:center;background:var(--accent-l);color:var(--accent-d);text-transform:uppercase;letter-spacing:.3px;}
 .challan-yellow{background:var(--yellow) !important;}
 .challan-blue{background:var(--autocell) !important;}
-.challan input{border:1px solid #ccc !important;border-radius:4px !important;padding:2px 4px !important;background:var(--yellow) !important;}
-.challan input[type=checkbox]{width:17px;height:17px;cursor:pointer;}
+.challan input{border:1px solid #e6cf8a !important;border-bottom:2px solid var(--yellow-bd) !important;border-radius:4px !important;padding:2px 4px !important;background:var(--yellow) !important;}
+.challan input[type=checkbox]{width:18px;height:18px;cursor:pointer;border:1px solid var(--accent) !important;background:#fff !important;}
 small.hint{color:var(--muted);font-weight:normal;}
 
 /* overdue alerts (3-day SLA on Stage 02 / 05) */

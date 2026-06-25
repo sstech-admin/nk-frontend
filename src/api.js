@@ -65,6 +65,8 @@ export const api = {
   delContractor: (name) => call("DELETE", "/contractors/" + encodeURIComponent(name)),
   addPanelType: (name) => call("POST", "/panel-types", { name }),
   delPanelType: (name) => call("DELETE", "/panel-types/" + encodeURIComponent(name)),
+  addParty: (p) => call("POST", "/parties", p),
+  delParty: (name) => call("DELETE", "/parties/" + encodeURIComponent(name)),
   reports: (range = {}) => {
     const q = [];
     if (range.from) q.push(`from=${range.from}`);
