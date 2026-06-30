@@ -1,0 +1,13 @@
+Save the company logo image in THIS folder named exactly:
+
+    logo.png
+
+(Use the PropVerse.ai logo PNG you shared.)
+
+Once it's here as nk-frontend/public/logo.png it will automatically appear
+in the top header and on the login screen. No code change or restart needed —
+just refresh the browser. If the file is missing, the app simply shows the
+text title instead (no error).
+
+A .jpg works too, but then rename the references in src/App.jsx from
+"/logo.png" to "/logo.jpg" (two places: header and login).
